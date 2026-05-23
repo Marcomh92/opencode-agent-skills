@@ -30,6 +30,7 @@ import {
 
 const setupCompleteSessions = new Set<string>();
 const loadedSkillsPerSession = new Map<string, Set<string>>();
+const currentAgentPerSession = new Map<string, string>();
 
 function getLoadedSkills(sessionID: string): Set<string> {
   let set = loadedSkillsPerSession.get(sessionID);
@@ -145,6 +146,10 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
 
       if (!setupCompleteSessions.has(sessionID)) {
         setupCompleteSessions.add(sessionID);
+        currentAgentPerSession.set(sessionID, agentName ?? "");
+
+        await log(`[SKILLS PLUGIN] First message for session ${sessionID}, agent="${agentName}"`);
+        await log(`[SKILLS PLUGIN] Initial permissions: ${JSON.stringify(permissions)}`);
 
         const context: SessionContext = {
           model: output.message.model,
@@ -155,6 +160,38 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
         await injectSkillsList(projectDir, client, sessionID, context, permissions);
 
         return;
+      }
+
+      // Check if agent changed since last message
+      const lastAgent = currentAgentPerSession.get(sessionID);
+      const currentAgent = agentName ?? "";
+      
+      if (lastAgent !== currentAgent) {
+        await log(`[SKILLS PLUGIN] Agent changed for session ${sessionID}: "${lastAgent}" -> "${currentAgent}"`);
+        await log(`[SKILLS PLUGIN] Old permissions: ${JSON.stringify(lastAgent ? await getPermissionsForAgent(lastAgent) : globalPermissions)}`);
+        await log(`[SKILLS PLUGIN] New permissions: ${JSON.stringify(permissions)}`);
+        currentAgentPerSession.set(sessionID, currentAgent);
+        
+        // Re-inject updated skills list for new agent
+        const context: SessionContext = {
+          model: output.message.model,
+          agent: agentName,
+        };
+        
+        const switchNotice = `<agent-switch-notice>Agent changed from "${lastAgent}" to "${currentAgent}". The updated available skills list below supersedes any previous lists.</agent-switch-notice>`;
+        await log(`[SKILLS PLUGIN] Injecting switch notice: ${switchNotice}`);
+        
+        await injectSyntheticContent(
+          client, 
+          sessionID, 
+          switchNotice,
+          context
+        );
+        await injectSkillsList(projectDir, client, sessionID, context, permissions);
+        
+        // Clear loaded skills tracking since agent changed
+        loadedSkillsPerSession.delete(sessionID);
+        await log(`[SKILLS PLUGIN] Cleared loaded skills for session ${sessionID} due to agent switch`);
       }
 
       const userText = output.parts
@@ -202,12 +239,14 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
         await maybeInjectSuperpowersBootstrap(projectDir, client, sessionID, context);
         await injectSkillsList(projectDir, client, sessionID, context, permissions);
         loadedSkillsPerSession.delete(sessionID);
+        // Note: We keep currentAgentPerSession since the agent hasn't changed, just the context was compacted
       }
 
       if (event.type === "session.deleted") {
         const sessionID = event.properties.info.id;
         setupCompleteSessions.delete(sessionID);
         loadedSkillsPerSession.delete(sessionID);
+        currentAgentPerSession.delete(sessionID);
       }
     },
 

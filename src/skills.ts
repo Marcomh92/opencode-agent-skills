@@ -443,14 +443,18 @@ export async function injectSkillsList(
     .map((s) => `- ${s.name}: ${s.description}`)
     .join("\n");
 
-  await injectSyntheticContent(
-    client,
-    sessionID,
-    `<available-skills>
+  const injectedBlock = `<available-skills>
 Use the use_skill, read_skill_file, run_skill_script, and get_available_skills tools to work with skills.
 
 ${skillsList}
-</available-skills>`,
+</available-skills>`;
+
+  await log(`[SKILLS DISCOVERY] Injecting block for session ${sessionID}:\n${injectedBlock}`);
+
+  await injectSyntheticContent(
+    client,
+    sessionID,
+    injectedBlock,
     context,
   );
 }

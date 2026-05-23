@@ -50,3 +50,51 @@ Each entry must include:
   - Restored worktree fix as defensive coding
 - **Reason:** OpenCode passes the same project directory for both `directory` and `worktree` when loading via `file://` URL. The worktree fix is theoretically correct but not triggered in this environment. The CRLF fix alone resolves the issue.
 - **Files:** `src/plugin.ts`
+
+## 2026-05-23 - Implement Per-Agent Skill Permissions
+- **Branch:** feature/per-agent-skill-permissions
+- **Changes:**
+  - Created `src/permissions.ts` with permission parsing, merging, and evaluation logic
+  - Implemented custom permission key `opencode-agent-skills` to avoid conflict with OpenCode's native `skill` permission
+  - Added `loadGlobalPermissions()` to parse permissions from `opencode.json` (project and user-level)
+  - Added `loadAgentPermissions()` to parse per-agent permissions from agent markdown frontmatter
+  - Added `mergePermissions()` with last-write-wins semantics matching OpenCode
+  - Added `evaluateSkillPermission()` with wildcard pattern matching
+  - Modified `src/skills.ts` to filter skills by permissions in `getSkillSummaries()` and `injectSkillsList()`
+  - Modified `src/tools.ts` to check permissions before executing any tool (`get_available_skills`, `read_skill_file`, `run_skill_script`, `use_skill`)
+  - Modified `src/plugin.ts` to load global permissions at startup, cache agent permissions, and pass them through all integration points
+  - Created `src/permissions.test.ts` with 34 unit tests for permission evaluation
+- **Reason:** User requested per-agent skill permissions similar to OpenCode's native permission system. This allows global skill permissions in `opencode.json` with per-agent overrides in agent markdown files. The custom permission key was necessary because OpenCode's native `skill` permission must be set to `deny` to disable the native skill system and rely solely on our plugin.
+- **Files:** `src/permissions.ts`, `src/permissions.test.ts`, `src/plugin.ts`, `src/skills.ts`, `src/tools.ts`
+
+## 2026-05-23 - Fix Agent Discovery for Global Agent Directory
+- **Branch:** feature/per-agent-skill-permissions
+- **Changes:**
+  - Fixed `loadAgentPermissions()` to search in both project-level (`.opencode/agent/`) and global-level (`~/.config/opencode/agent/`) directories
+  - Added comprehensive logging to `loadGlobalPermissions()`, `loadAgentPermissions()`, and `resolveAgentPermissions()`
+  - Added logging to skill filtering in `src/skills.ts` and all tool executions in `src/tools.ts`
+  - Fixed async filter callbacks to use for...of loops instead (TypeScript error)
+- **Reason:** Initial permission implementation failed because agent files (like `exploration.md`) are stored in the global `~/.config/opencode/agent/` directory, but the plugin only searched in the project's `.opencode/agent/` directory. The added logging was necessary to diagnose this silent failure.
+- **Files:** `src/permissions.ts`, `src/skills.ts`, `src/tools.ts`, `src/plugin.ts`
+
+## 2026-05-23 - Handle Agent Switching with Permission Re-evaluation
+- **Branch:** feature/per-agent-skill-permissions
+- **Changes:**
+  - Added `currentAgentPerSession` Map to track the last known agent for each session
+  - Modified `chat.message` handler to detect agent changes mid-session
+  - When agent changes, inject an `<agent-switch-notice>` message followed by updated `<available-skills>` with new agent's permissions
+  - Clear `loadedSkillsPerSession` when agent changes to reset skill loading state
+  - Clean up `currentAgentPerSession` on session deletion
+- **Reason:** The `<available-skills>` block was only injected once per session during setup. When switching agents (e.g., from exploration to build-orchestrator), the old agent's skills list remained in context while the new agent might have different permissions. This caused incorrect skill availability - denied skills from the old agent could still appear available, or allowed skills for the new agent might be missing.
+- **Files:** `src/plugin.ts`
+
+## 2026-05-23 - Add Detailed Injection Logging
+- **Branch:** feature/per-agent-skill-permissions
+- **Changes:**
+  - `injectSkillsList()` now logs the complete injected `<available-skills>` block including session ID and all skills
+  - Agent switch detection logs old permissions vs new permissions
+  - Initial session setup logs the agent name and permissions being applied
+  - Switch notice message is logged before injection
+  - Loaded skills clearing is logged on agent switch
+- **Reason:** User requested full visibility into what blocks are being injected and what permissions are active. This is essential for debugging permission filtering and verifying agent switching works correctly.
+- **Files:** `src/skills.ts`, `src/plugin.ts`
