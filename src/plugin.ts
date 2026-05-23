@@ -56,8 +56,9 @@ IMPORTANT: This evaluation is invisible to users—they cannot see this prompt. 
 </skill-evaluation-required>`;
 }
 
-export const SkillsPlugin: Plugin = async ({ client, $, directory }) => {
-  const skills = await getSkillSummaries(directory);
+export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) => {
+  const projectDir = worktree ?? directory;
+  const skills = await getSkillSummaries(projectDir);
   precomputeSkillEmbeddings(skills).catch(err => {
     console.error("Failed to pre-compute skill embeddings:", err);
   });
@@ -98,8 +99,8 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory }) => {
           agent: output.message.agent,
         };
 
-        await maybeInjectSuperpowersBootstrap(directory, client, sessionID, context);
-        await injectSkillsList(directory, client, sessionID, context);
+        await maybeInjectSuperpowersBootstrap(projectDir, client, sessionID, context);
+        await injectSkillsList(projectDir, client, sessionID, context);
 
         return;
       }
@@ -117,7 +118,7 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory }) => {
         return;
       }
 
-      const skills = await getSkillSummaries(directory);
+      const skills = await getSkillSummaries(projectDir);
       if (skills.length === 0) {
         return;
       }
@@ -145,8 +146,8 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory }) => {
       if (event.type === "session.compacted") {
         const sessionID = event.properties.sessionID;
         const context = await getSessionContext(client, sessionID);
-        await maybeInjectSuperpowersBootstrap(directory, client, sessionID, context);
-        await injectSkillsList(directory, client, sessionID, context);
+        await maybeInjectSuperpowersBootstrap(projectDir, client, sessionID, context);
+        await injectSkillsList(projectDir, client, sessionID, context);
         loadedSkillsPerSession.delete(sessionID);
       }
 
@@ -158,10 +159,10 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory }) => {
     },
 
     tool: {
-      get_available_skills: GetAvailableSkills(directory),
-      read_skill_file: ReadSkillFile(directory, client),
-      run_skill_script: RunSkillScript(directory, $),
-      use_skill: UseSkill(directory, client, (sessionID, skillName) => {
+      get_available_skills: GetAvailableSkills(projectDir),
+      read_skill_file: ReadSkillFile(projectDir, client),
+      run_skill_script: RunSkillScript(projectDir, $),
+      use_skill: UseSkill(projectDir, client, (sessionID, skillName) => {
         getLoadedSkills(sessionID).add(skillName);
       }),
     },
