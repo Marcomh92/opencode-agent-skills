@@ -22,6 +22,11 @@ import { injectSkillsList, getSkillSummaries } from "./skills";
 import { GetAvailableSkills, ReadSkillFile, RunSkillScript, UseSkill } from "./tools";
 import { matchSkills, precomputeSkillEmbeddings } from "./embeddings";
 import { log, clearLog } from "./logger";
+import {
+  loadGlobalPermissions,
+  resolveAgentPermissions,
+  type AgentPermissions,
+} from "./permissions";
 
 const setupCompleteSessions = new Set<string>();
 const loadedSkillsPerSession = new Map<string, Set<string>>();
@@ -63,7 +68,36 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
   await log(`[SKILLS PLUGIN] directory: ${directory}`);
   await log(`[SKILLS PLUGIN] worktree: ${worktree}`);
   await log(`[SKILLS PLUGIN] projectDir (used for discovery): ${projectDir}`);
-  const skills = await getSkillSummaries(projectDir);
+
+  // Load global permissions once at plugin startup
+  const globalPermissions = await loadGlobalPermissions(projectDir);
+  await log(`[SKILLS PLUGIN] Global permissions loaded: ${globalPermissions.skill.length} rules`);
+
+  // Cache for resolved agent permissions
+  const permissionsCache = new Map<string, AgentPermissions>();
+
+  async function getPermissionsForAgent(
+    agentName?: string,
+  ): Promise<AgentPermissions> {
+    if (!agentName) {
+      return globalPermissions;
+    }
+
+    const cached = permissionsCache.get(agentName);
+    if (cached) {
+      return cached;
+    }
+
+    const resolved = await resolveAgentPermissions(
+      projectDir,
+      agentName,
+      globalPermissions,
+    );
+    permissionsCache.set(agentName, resolved);
+    return resolved;
+  }
+
+  const skills = await getSkillSummaries(projectDir, globalPermissions);
   await log(`[SKILLS PLUGIN] Initial skill count: ${skills.length}`);
   for (const s of skills) {
     await log(`[SKILLS PLUGIN]  - ${s.name} (${s.description})`);
@@ -75,6 +109,7 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
   return {
     "chat.message": async (input, output) => {
       const sessionID = output.message.sessionID;
+      const agentName = output.message.agent;
       const isFirstMessage = !setupCompleteSessions.has(sessionID);
 
       if (isFirstMessage) {
@@ -100,16 +135,18 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
         }
       }
 
+      const permissions = await getPermissionsForAgent(agentName);
+
       if (!setupCompleteSessions.has(sessionID)) {
         setupCompleteSessions.add(sessionID);
 
         const context: SessionContext = {
           model: output.message.model,
-          agent: output.message.agent,
+          agent: agentName,
         };
 
         await maybeInjectSuperpowersBootstrap(projectDir, client, sessionID, context);
-        await injectSkillsList(projectDir, client, sessionID, context);
+        await injectSkillsList(projectDir, client, sessionID, context, permissions);
 
         return;
       }
@@ -127,7 +164,7 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
         return;
       }
 
-      const skills = await getSkillSummaries(projectDir);
+      const skills = await getSkillSummaries(projectDir, permissions);
       if (skills.length === 0) {
         return;
       }
@@ -145,7 +182,7 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
 
       const context: SessionContext = {
         model: output.message.model,
-        agent: output.message.agent,
+        agent: agentName,
       };
 
       await injectSyntheticContent(client, sessionID, injectionText, context);
@@ -155,8 +192,9 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
       if (event.type === "session.compacted") {
         const sessionID = event.properties.sessionID;
         const context = await getSessionContext(client, sessionID);
+        const permissions = await getPermissionsForAgent(context?.agent);
         await maybeInjectSuperpowersBootstrap(projectDir, client, sessionID, context);
-        await injectSkillsList(projectDir, client, sessionID, context);
+        await injectSkillsList(projectDir, client, sessionID, context, permissions);
         loadedSkillsPerSession.delete(sessionID);
       }
 
@@ -168,10 +206,10 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
     },
 
     tool: {
-      get_available_skills: GetAvailableSkills(projectDir),
-      read_skill_file: ReadSkillFile(projectDir, client),
-      run_skill_script: RunSkillScript(projectDir, $),
-      use_skill: UseSkill(projectDir, client, (sessionID, skillName) => {
+      get_available_skills: GetAvailableSkills(projectDir, client, getPermissionsForAgent),
+      read_skill_file: ReadSkillFile(projectDir, client, getPermissionsForAgent),
+      run_skill_script: RunSkillScript(projectDir, $, client, getPermissionsForAgent),
+      use_skill: UseSkill(projectDir, client, getPermissionsForAgent, (sessionID, skillName) => {
         getLoadedSkills(sessionID).add(skillName);
       }),
     },

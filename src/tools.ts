@@ -26,20 +26,33 @@ import {
   listSkillFiles,
 } from "./skills";
 import { log } from "./logger";
+import {
+  isSkillAllowed,
+  type AgentPermissions,
+} from "./permissions";
 
-export const GetAvailableSkills = (directory: string) => {
+export const GetAvailableSkills = (
+  directory: string,
+  client: OpencodeClient,
+  getPermissions: (agentName?: string) => Promise<AgentPermissions>,
+) => {
   return tool({
     description: "Get available skills with their descriptions. Optionally filter by query.",
     args: {
       query: tool.schema.string().optional()
         .describe("Search query to filter skills (matches name and description)")
     },
-    async execute(args) {
+    async execute(args, ctx) {
       await log(`[SKILLS TOOL] get_available_skills called. directory=${directory} query=${args.query}`);
       const skillsByName = await discoverAllSkills(directory);
       const allSkills = Array.from(skillsByName.values());
 
-      let filtered = allSkills;
+      const context = await getSessionContext(client, ctx.sessionID);
+      const permissions = await getPermissions(context?.agent);
+
+      let filtered = permissions
+        ? allSkills.filter((skill) => isSkillAllowed(skill.name, permissions))
+        : allSkills;
 
       if (args.query) {
         const pattern = new RegExp(args.query.replace(/\*/g, '.*'), 'i');
@@ -50,8 +63,10 @@ export const GetAvailableSkills = (directory: string) => {
 
       if (filtered.length === 0) {
         if (args.query) {
-          const allSkillNames = allSkills.map(s => s.name);
-          const suggestion = findClosestMatch(args.query, allSkillNames);
+          const visibleSkillNames = allSkills
+            .filter((skill) => !permissions || isSkillAllowed(skill.name, permissions))
+            .map(s => s.name);
+          const suggestion = findClosestMatch(args.query, visibleSkillNames);
 
           if (suggestion) {
             return `No skills found matching "${args.query}". Did you mean "${suggestion}"?`;
@@ -73,7 +88,11 @@ export const GetAvailableSkills = (directory: string) => {
   });
 };
 
-export const ReadSkillFile = (directory: string, client: OpencodeClient) => {
+export const ReadSkillFile = (
+  directory: string,
+  client: OpencodeClient,
+  getPermissions: (agentName?: string) => Promise<AgentPermissions>,
+) => {
   return tool({
     description: "Read a supporting file from a skill's directory (docs, examples, configs).",
     args: {
@@ -86,6 +105,14 @@ export const ReadSkillFile = (directory: string, client: OpencodeClient) => {
       await log(`[SKILLS TOOL] read_skill_file called. directory=${directory} skill=${args.skill} file=${args.filename}`);
       const skillsByName = await discoverAllSkills(directory);
       const allSkills = Array.from(skillsByName.values());
+
+      const context = await getSessionContext(client, ctx.sessionID);
+      const permissions = await getPermissions(context?.agent);
+
+      // Check permission before resolving skill
+      if (permissions && !isSkillAllowed(args.skill, permissions)) {
+        return `Access denied: skill "${args.skill}" is not available to this agent.`;
+      }
 
       const skill = resolveSkill(args.skill, skillsByName);
 
@@ -137,7 +164,12 @@ ${content}
   });
 };
 
-export const RunSkillScript = (directory: string, $: PluginInput["$"]) => {
+export const RunSkillScript = (
+  directory: string,
+  $: PluginInput["$"],
+  client: OpencodeClient,
+  getPermissions: (agentName?: string) => Promise<AgentPermissions>,
+) => {
   return tool({
     description: "Execute a script from a skill's directory. Scripts are run with the skill directory as CWD.",
     args: {
@@ -148,10 +180,18 @@ export const RunSkillScript = (directory: string, $: PluginInput["$"]) => {
       arguments: tool.schema.array(tool.schema.string()).optional()
         .describe("Arguments to pass to the script")
     },
-    async execute(args) {
+    async execute(args, ctx) {
       await log(`[SKILLS TOOL] run_skill_script called. directory=${directory} skill=${args.skill} script=${args.script}`);
       const skillsByName = await discoverAllSkills(directory);
       const allSkills = Array.from(skillsByName.values());
+
+      const context = await getSessionContext(client, ctx.sessionID);
+      const permissions = await getPermissions(context?.agent);
+
+      // Check permission before resolving skill
+      if (permissions && !isSkillAllowed(args.skill, permissions)) {
+        return `Access denied: skill "${args.skill}" is not available to this agent.`;
+      }
 
       const skill = resolveSkill(args.skill, skillsByName);
 
@@ -204,7 +244,8 @@ export const RunSkillScript = (directory: string, $: PluginInput["$"]) => {
 export const UseSkill = (
   directory: string,
   client: OpencodeClient,
-  onSkillLoaded?: (sessionID: string, skillName: string) => void
+  getPermissions: (agentName?: string) => Promise<AgentPermissions>,
+  onSkillLoaded?: (sessionID: string, skillName: string) => void,
 ) => {
   return tool({
     description: "Load a skill's SKILL.md content into context. Skills contain proven workflows, techniques, and patterns.",
@@ -216,6 +257,14 @@ export const UseSkill = (
       await log(`[SKILLS TOOL] use_skill called. directory=${directory} skill=${args.skill}`);
       const skillsByName = await discoverAllSkills(directory);
       const allSkills = Array.from(skillsByName.values());
+
+      const sessionContext = await getSessionContext(client, ctx.sessionID);
+      const permissions = await getPermissions(sessionContext?.agent);
+
+      // Check permission before resolving skill
+      if (permissions && !isSkillAllowed(args.skill, permissions)) {
+        return `Access denied: skill "${args.skill}" is not available to this agent.`;
+      }
 
       const skill = resolveSkill(args.skill, skillsByName);
 

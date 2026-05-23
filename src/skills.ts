@@ -19,6 +19,7 @@ import {
 } from "./utils";
 import { discoverMarketplaceSkills, discoverPluginCacheSkills } from "./claude";
 import { log } from "./logger";
+import { isSkillAllowed, type AgentPermissions } from "./permissions";
 
 /**
  * Skill label indicating the source/location of a skill.
@@ -355,12 +356,22 @@ export interface SkillSummary {
  * Used by preflight LLM call to evaluate which skills are relevant.
  *
  * @param directory - Project directory to discover skills from
+ * @param permissions - Optional agent permissions to filter by
  * @returns Array of skill summaries
  */
-export async function getSkillSummaries(directory: string): Promise<SkillSummary[]> {
+export async function getSkillSummaries(
+  directory: string,
+  permissions?: AgentPermissions,
+): Promise<SkillSummary[]> {
   await log(`[SKILLS DISCOVERY] getSkillSummaries called with directory: ${directory}`);
   const skillsByName = await discoverAllSkills(directory);
-  const summaries = Array.from(skillsByName.values()).map(skill => ({
+  const skills = Array.from(skillsByName.values());
+
+  const filtered = permissions
+    ? skills.filter((skill) => isSkillAllowed(skill.name, permissions))
+    : skills;
+
+  const summaries = filtered.map((skill) => ({
     name: skill.name,
     description: skill.description,
   }));
@@ -371,21 +382,32 @@ export async function getSkillSummaries(directory: string): Promise<SkillSummary
 /**
  * Inject the available skills list into a session.
  * Used on session start and after compaction.
+ *
+ * @param directory - Project directory to discover skills from
+ * @param client - OpenCode client
+ * @param sessionID - Session ID to inject into
+ * @param context - Optional session context
+ * @param permissions - Optional agent permissions to filter by
  */
 export async function injectSkillsList(
   directory: string,
   client: OpencodeClient,
   sessionID: string,
-  context?: SessionContext
+  context?: SessionContext,
+  permissions?: AgentPermissions,
 ): Promise<void> {
   const skillsByName = await discoverAllSkills(directory);
   const skills = Array.from(skillsByName.values());
 
-  if (skills.length === 0) return;
+  const filtered = permissions
+    ? skills.filter((skill) => isSkillAllowed(skill.name, permissions))
+    : skills;
 
-  const skillsList = skills
-    .map(s => `- ${s.name}: ${s.description}`)
-    .join('\n');
+  if (filtered.length === 0) return;
+
+  const skillsList = filtered
+    .map((s) => `- ${s.name}: ${s.description}`)
+    .join("\n");
 
   await injectSyntheticContent(
     client,
@@ -395,6 +417,6 @@ Use the use_skill, read_skill_file, run_skill_script, and get_available_skills t
 
 ${skillsList}
 </available-skills>`,
-    context
+    context,
   );
 }
