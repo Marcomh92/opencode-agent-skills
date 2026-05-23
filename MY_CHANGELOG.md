@@ -98,3 +98,28 @@ Each entry must include:
   - Loaded skills clearing is logged on agent switch
 - **Reason:** User requested full visibility into what blocks are being injected and what permissions are active. This is essential for debugging permission filtering and verifying agent switching works correctly.
 - **Files:** `src/skills.ts`, `src/plugin.ts`
+
+## 2026-05-23 - Implement Message Reversion for Clean Agent Switching (REVERTED - UNSAFE)
+- **Branch:** feature/per-agent-skill-permissions
+- **Changes:**
+  - Modified `injectSyntheticContent()` to return the created message ID
+  - Added `revertMessage()` utility function using OpenCode's `session.revert()` API
+  - Added `injectedMessageIdsPerSession` Map to track injected synthetic message IDs
+  - Added `revertOldInjections()` helper to remove old `<available-skills>` and `<agent-switch-notice>` messages
+  - Added `trackInjection()` helper to store message IDs for later reversion
+  - On agent switch: old messages are reverted BEFORE new ones are injected
+  - Updated `injectSkillsList()` to return message ID instead of void
+  - Clean up tracked message IDs on session deletion
+- **Reason:** Initial implementation was APPENDING new `<available-skills>` blocks on agent switch while leaving old ones in context. This caused the LLM to see multiple (potentially conflicting) skills lists. By tracking and reverting old synthetic messages before injecting new ones, each session now maintains exactly one current `<available-skills>` block.
+- **Files:** `src/plugin.ts`, `src/skills.ts`, `src/utils.ts`
+
+## 2026-05-23 - Remove Unsafe revert() Implementation
+- **Branch:** feature/per-agent-skill-permissions
+- **Changes:**
+  - **REMOVED** `revertMessage()` function from `src/utils.ts` - `session.revert()` is a history-rewind mechanism, not selective message deletion
+  - **RESTORED** `injectSyntheticContent()` to return `void` instead of message ID
+  - **RESTORED** `injectSkillsList()` to return `void` instead of message ID
+  - **REMOVED** `injectedMessageIdsPerSession`, `revertOldInjections()`, and `trackInjection()` from `src/plugin.ts`
+  - **RESTORED** safe agent-switch behavior: inject `<agent-switch-notice>` + updated `<available-skills>` without attempting to remove old blocks
+- **Reason:** Research of OpenCode source code revealed that `session.revert()` is a **history-rewind mechanism** that marks a revert point and hides ALL subsequent messages. On the next prompt, `cleanup()` permanently deletes everything after the revert point. Using it would have destroyed user conversation history. The OpenCode plugin SDK does not expose a safe `removePart` API. The safe approach is to inject updated blocks with a superseding notice and let the LLM prefer the most recent context.
+- **Files:** `src/plugin.ts`, `src/skills.ts`, `src/utils.ts`

@@ -173,6 +173,8 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
         currentAgentPerSession.set(sessionID, currentAgent);
         
         // Re-inject updated skills list for new agent
+        // Note: Old blocks remain in context but the new one appears later.
+        // The <agent-switch-notice> tells the model to use the new list.
         const context: SessionContext = {
           model: output.message.model,
           agent: agentName,
