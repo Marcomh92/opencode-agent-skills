@@ -79,20 +79,26 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
   async function getPermissionsForAgent(
     agentName?: string,
   ): Promise<AgentPermissions> {
+    await log(`[SKILLS PLUGIN] getPermissionsForAgent called with agentName=${agentName}`);
+
     if (!agentName) {
+      await log(`[SKILLS PLUGIN] No agent name, returning global permissions`);
       return globalPermissions;
     }
 
     const cached = permissionsCache.get(agentName);
     if (cached) {
+      await log(`[SKILLS PLUGIN] Returning cached permissions for ${agentName}: ${JSON.stringify(cached)}`);
       return cached;
     }
 
+    await log(`[SKILLS PLUGIN] Resolving permissions for agent: ${agentName}`);
     const resolved = await resolveAgentPermissions(
       projectDir,
       agentName,
       globalPermissions,
     );
+    await log(`[SKILLS PLUGIN] Resolved permissions for ${agentName}: ${JSON.stringify(resolved)}`);
     permissionsCache.set(agentName, resolved);
     return resolved;
   }

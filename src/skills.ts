@@ -364,12 +364,29 @@ export async function getSkillSummaries(
   permissions?: AgentPermissions,
 ): Promise<SkillSummary[]> {
   await log(`[SKILLS DISCOVERY] getSkillSummaries called with directory: ${directory}`);
+  if (permissions) {
+    await log(`[SKILLS DISCOVERY] Permission rules: ${JSON.stringify(permissions.skill)}`);
+  }
+
   const skillsByName = await discoverAllSkills(directory);
   const skills = Array.from(skillsByName.values());
+  await log(`[SKILLS DISCOVERY] Total skills discovered: ${skills.length}`);
 
-  const filtered = permissions
-    ? skills.filter((skill) => isSkillAllowed(skill.name, permissions))
-    : skills;
+  let filtered: typeof skills;
+  if (permissions) {
+    filtered = [];
+    for (const skill of skills) {
+      const allowed = isSkillAllowed(skill.name, permissions);
+      await log(`[SKILLS DISCOVERY] Skill "${skill.name}" allowed=${allowed}`);
+      if (allowed) {
+        filtered.push(skill);
+      }
+    }
+  } else {
+    filtered = skills;
+  }
+
+  await log(`[SKILLS DISCOVERY] Skills after filtering: ${filtered.length} (removed ${skills.length - filtered.length})`);
 
   const summaries = filtered.map((skill) => ({
     name: skill.name,
@@ -396,12 +413,29 @@ export async function injectSkillsList(
   context?: SessionContext,
   permissions?: AgentPermissions,
 ): Promise<void> {
+  await log(`[SKILLS DISCOVERY] injectSkillsList called`);
+  if (permissions) {
+    await log(`[SKILLS DISCOVERY] Permission rules: ${JSON.stringify(permissions.skill)}`);
+  }
+
   const skillsByName = await discoverAllSkills(directory);
   const skills = Array.from(skillsByName.values());
 
-  const filtered = permissions
-    ? skills.filter((skill) => isSkillAllowed(skill.name, permissions))
-    : skills;
+  let filtered: typeof skills;
+  if (permissions) {
+    filtered = [];
+    for (const skill of skills) {
+      const allowed = isSkillAllowed(skill.name, permissions);
+      await log(`[SKILLS DISCOVERY] Skill "${skill.name}" allowed=${allowed}`);
+      if (allowed) {
+        filtered.push(skill);
+      }
+    }
+  } else {
+    filtered = skills;
+  }
+
+  await log(`[SKILLS DISCOVERY] Skills after filtering: ${filtered.length} (removed ${skills.length - filtered.length})`);
 
   if (filtered.length === 0) return;
 

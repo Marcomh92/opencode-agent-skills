@@ -87,10 +87,15 @@ export async function loadGlobalPermissions(
     path.join(homedir(), ".config", "opencode", "opencode.json"),
   ];
 
+  await log(`[PERMISSIONS] loadGlobalPermissions starting. projectDir=${projectDir}`);
+
   for (const configPath of configPaths) {
     try {
+      await log(`[PERMISSIONS] Checking config file: ${configPath}`);
       const content = await fs.readFile(configPath, "utf-8");
       const config = JSON.parse(content) as Record<string, unknown>;
+
+      await log(`[PERMISSIONS] Parsed config from ${configPath}`);
 
       const permissionBlock = config.permission as
         | Record<string, unknown>
@@ -98,25 +103,29 @@ export async function loadGlobalPermissions(
       const skillPerms = permissionBlock?.[PLUGIN_PERMISSION_KEY];
 
       if (skillPerms) {
+        await log(`[PERMISSIONS] Found ${PLUGIN_PERMISSION_KEY} in config: ${JSON.stringify(skillPerms)}`);
         const parsed = parsePermissionRules(skillPerms);
         if (parsed) {
           await log(
-            `[PERMISSIONS] Loaded global permissions from ${configPath}`,
+            `[PERMISSIONS] Loaded global permissions from ${configPath}: ${JSON.stringify(parsed)}`,
           );
           return { skill: parsed };
         }
+      } else {
+        await log(`[PERMISSIONS] No ${PLUGIN_PERMISSION_KEY} key found in ${configPath}`);
       }
-    } catch {
-      // File doesn't exist or is invalid — continue to next path
+    } catch (err) {
+      await log(`[PERMISSIONS] Config file not found or invalid: ${configPath} - ${err}`);
     }
   }
 
+  await log(`[PERMISSIONS] No global permissions found, using default: allow all`);
   return defaultPerms;
 }
 
 /**
  * Find agent markdown file and parse its permission frontmatter.
- * Looks in .opencode/agents/ and .opencode/agent/ for .md files matching agent name.
+ * Looks in both project (.opencode/agent/) and global (~/.config/opencode/agent/) directories.
  *
  * @param projectDir - Project directory containing .opencode/agents/
  * @param agentName - Name of the agent to find permissions for
@@ -127,28 +136,46 @@ export async function loadAgentPermissions(
   agentName: string | undefined,
 ): Promise<AgentPermissions | null> {
   if (!agentName) {
+    await log(`[PERMISSIONS] loadAgentPermissions: no agentName provided, returning null`);
     return null;
   }
+
+  await log(`[PERMISSIONS] loadAgentPermissions starting. agentName=${agentName} projectDir=${projectDir}`);
 
   const agentDirs = ["agents", "agent"];
   const agentFiles: string[] = [];
 
-  for (const dir of agentDirs) {
-    const fullDir = path.join(projectDir, ".opencode", dir);
-    try {
-      const entries = await fs.readdir(fullDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isFile() && entry.name.endsWith(".md")) {
-          agentFiles.push(path.join(fullDir, entry.name));
+  // Search both project and global agent directories
+  const searchRoots = [
+    path.join(projectDir, ".opencode"),
+    path.join(homedir(), ".config", "opencode"),
+  ];
+
+  for (const searchRoot of searchRoots) {
+    for (const dir of agentDirs) {
+      const fullDir = path.join(searchRoot, dir);
+      try {
+        await log(`[PERMISSIONS] Searching for agents in: ${fullDir}`);
+        const entries = await fs.readdir(fullDir, { withFileTypes: true });
+        await log(`[PERMISSIONS] Found ${entries.length} entries in ${fullDir}`);
+        for (const entry of entries) {
+          if (entry.isFile() && entry.name.endsWith(".md")) {
+            const filePath = path.join(fullDir, entry.name);
+            await log(`[PERMISSIONS] Found agent file: ${filePath}`);
+            agentFiles.push(filePath);
+          }
         }
+      } catch {
+        await log(`[PERMISSIONS] Directory not accessible: ${fullDir}`);
       }
-    } catch {
-      // Directory doesn't exist — skip
     }
   }
 
+  await log(`[PERMISSIONS] Total agent files found: ${agentFiles.length}`);
+
   for (const filePath of agentFiles) {
     try {
+      await log(`[PERMISSIONS] Reading agent file: ${filePath}`);
       const content = await fs.readFile(filePath, "utf-8");
       const frontmatterMatch =
         content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
@@ -157,29 +184,37 @@ export async function loadAgentPermissions(
         const frontmatter = parseYamlFrontmatter(frontmatterMatch[1]);
         const fileAgentName = path.basename(filePath, ".md");
 
+        await log(`[PERMISSIONS] Checking file ${filePath}: fileAgentName=${fileAgentName} frontmatter.name=${frontmatter.name}`);
+
         // Match by explicit name field or filename
         if (
           frontmatter.name === agentName ||
           fileAgentName === agentName
         ) {
+          await log(`[PERMISSIONS] MATCHED agent ${agentName} in file ${filePath}`);
+
           const permissionBlock = frontmatter.permission as
             | Record<string, unknown>
             | undefined;
           const skillPerms = permissionBlock?.[PLUGIN_PERMISSION_KEY];
 
           if (skillPerms) {
+            await log(`[PERMISSIONS] Found ${PLUGIN_PERMISSION_KEY} in frontmatter: ${JSON.stringify(skillPerms)}`);
             const parsed = parsePermissionRules(skillPerms);
             if (parsed) {
               await log(
-                `[PERMISSIONS] Loaded agent permissions from ${filePath}`,
+                `[PERMISSIONS] Loaded agent permissions from ${filePath}: ${JSON.stringify(parsed)}`,
               );
               return { skill: parsed };
             }
           }
 
           // Agent found but no plugin skill permissions
+          await log(`[PERMISSIONS] Agent found but no ${PLUGIN_PERMISSION_KEY} permissions`);
           return { skill: [] };
         }
+      } else {
+        await log(`[PERMISSIONS] No frontmatter found in ${filePath}`);
       }
     } catch (err) {
       await log(
@@ -188,6 +223,7 @@ export async function loadAgentPermissions(
     }
   }
 
+  await log(`[PERMISSIONS] No agent file found for ${agentName}`);
   return null;
 }
 
@@ -305,13 +341,17 @@ export async function resolveAgentPermissions(
   agentName: string | undefined,
   globalPerms: AgentPermissions,
 ): Promise<AgentPermissions> {
+  await log(`[PERMISSIONS] resolveAgentPermissions: agentName=${agentName}`);
   const agentPerms = await loadAgentPermissions(projectDir, agentName);
 
   if (!agentPerms) {
+    await log(`[PERMISSIONS] No agent permissions found, using global permissions: ${JSON.stringify(globalPerms)}`);
     return globalPerms;
   }
 
-  return {
+  const merged = {
     skill: mergePermissions(globalPerms.skill, agentPerms.skill),
   };
+  await log(`[PERMISSIONS] Merged permissions for ${agentName}: ${JSON.stringify(merged)}`);
+  return merged;
 }
