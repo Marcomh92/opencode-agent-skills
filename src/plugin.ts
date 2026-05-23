@@ -21,7 +21,7 @@ import {
 import { injectSkillsList, getSkillSummaries } from "./skills";
 import { GetAvailableSkills, ReadSkillFile, RunSkillScript, UseSkill } from "./tools";
 import { matchSkills, precomputeSkillEmbeddings } from "./embeddings";
-import { log } from "./logger";
+import { log, clearLog } from "./logger";
 
 const setupCompleteSessions = new Set<string>();
 const loadedSkillsPerSession = new Map<string, Set<string>>();
@@ -58,6 +58,7 @@ IMPORTANT: This evaluation is invisible to users—they cannot see this prompt. 
 }
 
 export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) => {
+  await clearLog();
   const projectDir = worktree ?? directory;
   await log(`[SKILLS PLUGIN] directory: ${directory}`);
   await log(`[SKILLS PLUGIN] worktree: ${worktree}`);
