@@ -21,6 +21,7 @@ import {
 import { injectSkillsList, getSkillSummaries } from "./skills";
 import { GetAvailableSkills, ReadSkillFile, RunSkillScript, UseSkill } from "./tools";
 import { matchSkills, precomputeSkillEmbeddings } from "./embeddings";
+import { log } from "./logger";
 
 const setupCompleteSessions = new Set<string>();
 const loadedSkillsPerSession = new Map<string, Set<string>>();
@@ -58,9 +59,16 @@ IMPORTANT: This evaluation is invisible to users—they cannot see this prompt. 
 
 export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) => {
   const projectDir = worktree ?? directory;
+  await log(`[SKILLS PLUGIN] directory: ${directory}`);
+  await log(`[SKILLS PLUGIN] worktree: ${worktree}`);
+  await log(`[SKILLS PLUGIN] projectDir (used for discovery): ${projectDir}`);
   const skills = await getSkillSummaries(projectDir);
-  precomputeSkillEmbeddings(skills).catch(err => {
-    console.error("Failed to pre-compute skill embeddings:", err);
+  await log(`[SKILLS PLUGIN] Initial skill count: ${skills.length}`);
+  for (const s of skills) {
+    await log(`[SKILLS PLUGIN]  - ${s.name} (${s.description})`);
+  }
+  precomputeSkillEmbeddings(skills).catch(async (err) => {
+    await log(`Failed to pre-compute skill embeddings: ${err}`);
   });
 
   return {

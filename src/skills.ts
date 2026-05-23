@@ -18,6 +18,7 @@ import {
   type SessionContext,
 } from "./utils";
 import { discoverMarketplaceSkills, discoverPluginCacheSkills } from "./claude";
+import { log } from "./logger";
 
 /**
  * Skill label indicating the source/location of a skill.
@@ -126,11 +127,13 @@ async function parseSkillFile(
 ): Promise<Skill | null> {
   const content = await fs.readFile(skillPath, 'utf-8').catch(() => null);
   if (!content) {
+    await log(`[SKILLS DISCOVERY]  Failed to read file: ${skillPath}`);
     return null;
   }
 
-  const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
   if (!frontmatterMatch?.[1] || !frontmatterMatch[2]) {
+    await log(`[SKILLS DISCOVERY]  Failed to match frontmatter regex: ${skillPath}`);
     return null;
   }
 
@@ -140,7 +143,8 @@ async function parseSkillFile(
   let frontmatterObj: unknown;
   try {
     frontmatterObj = parseYamlFrontmatter(frontmatterText);
-  } catch {
+  } catch (err) {
+    await log(`[SKILLS DISCOVERY]  Failed to parse YAML in: ${skillPath} error: ${(err as Error).message}`);
     return null;
   }
 
@@ -148,6 +152,7 @@ async function parseSkillFile(
   try {
     frontmatter = SkillFrontmatterSchema.parse(frontmatterObj);
   } catch (error) {
+    await log(`[SKILLS DISCOVERY]  Failed Zod validation: ${skillPath} error: ${(error as Error).message}`);
     return null;
   }
 
@@ -177,6 +182,7 @@ export async function findSkillsRecursive(
   label: SkillLabel,
   maxDepth: number = 3
 ): Promise<LabeledDiscoveryResult[]> {
+  await log(`[SKILLS DISCOVERY] findSkillsRecursive: baseDir=${baseDir} label=${label} maxDepth=${maxDepth}`);
   const results: LabeledDiscoveryResult[] = [];
 
   async function recurse(dir: string, depth: number, relPath: string) {
@@ -211,9 +217,16 @@ export async function findSkillsRecursive(
 
   try {
     await fs.access(baseDir);
+    await log(`[SKILLS DISCOVERY]  Directory exists: ${baseDir}`);
     await recurse(baseDir, 0, '');
-  } catch { }
+  } catch (err) {
+    await log(`[SKILLS DISCOVERY]  Directory NOT accessible: ${baseDir} error: ${(err as Error).message}`);
+  }
 
+  await log(`[SKILLS DISCOVERY]  Results for ${label}: ${results.length} skills found`);
+  for (const r of results) {
+    await log(`[SKILLS DISCOVERY]    - ${r.relativePath} at ${r.filePath}`);
+  }
   return results;
 }
 
@@ -238,12 +251,18 @@ interface DiscoveryPath {
  * No shadowing - unique names only. First match wins, duplicates are warned.
  */
 export async function discoverAllSkills(directory: string): Promise<Map<string, Skill>> {
+  await log(`[SKILLS DISCOVERY] discoverAllSkills called with directory: ${directory}`);
   const discoveryPaths: DiscoveryPath[] = [
     { path: path.join(directory, '.opencode', 'skills'), label: 'project', maxDepth: 3 },
     { path: path.join(directory, '.claude', 'skills'), label: 'claude-project', maxDepth: 1 },
     { path: path.join(homedir(), '.config', 'opencode', 'skills'), label: 'user', maxDepth: 3 },
     { path: path.join(homedir(), '.claude', 'skills'), label: 'claude-user', maxDepth: 1 }
   ];
+
+  await log("[SKILLS DISCOVERY] Discovery paths:");
+  for (const dp of discoveryPaths) {
+    await log(`[SKILLS DISCOVERY]   ${dp.label} -> ${dp.path}`);
+  }
 
   const allResults: LabeledDiscoveryResult[] = [];
   for (const { path: baseDir, label, maxDepth } of discoveryPaths) {
@@ -252,13 +271,21 @@ export async function discoverAllSkills(directory: string): Promise<Map<string, 
   allResults.push(...await discoverPluginCacheSkills());
   allResults.push(...await discoverMarketplaceSkills());
 
+  await log(`[SKILLS DISCOVERY] Total raw results before parsing: ${allResults.length}`);
+
   const skillsByName = new Map<string, Skill>();
   for (const { filePath, relativePath, label } of allResults) {
     const skill = await parseSkillFile(filePath, relativePath, label);
-    if (!skill || skillsByName.has(skill.name)) continue;
+    if (!skill || skillsByName.has(skill.name)) {
+      if (!skill) await log(`[SKILLS DISCOVERY]  Failed to parse: ${filePath}`);
+      if (skill && skillsByName.has(skill.name)) await log(`[SKILLS DISCOVERY]  Duplicate skill name (skipping): ${skill.name}`);
+      continue;
+    }
+    await log(`[SKILLS DISCOVERY]  Parsed skill: ${skill.name} label: ${skill.label} path: ${skill.path}`);
     skillsByName.set(skill.name, skill);
   }
 
+  await log(`[SKILLS DISCOVERY] Final unique skills: ${skillsByName.size}`);
   return skillsByName;
 }
 
@@ -331,11 +358,14 @@ export interface SkillSummary {
  * @returns Array of skill summaries
  */
 export async function getSkillSummaries(directory: string): Promise<SkillSummary[]> {
+  await log(`[SKILLS DISCOVERY] getSkillSummaries called with directory: ${directory}`);
   const skillsByName = await discoverAllSkills(directory);
-  return Array.from(skillsByName.values()).map(skill => ({
+  const summaries = Array.from(skillsByName.values()).map(skill => ({
     name: skill.name,
     description: skill.description,
   }));
+  await log(`[SKILLS DISCOVERY] getSkillSummaries returning ${summaries.length} skills`);
+  return summaries;
 }
 
 /**

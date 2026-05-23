@@ -25,6 +25,7 @@ import {
   resolveSkill,
   listSkillFiles,
 } from "./skills";
+import { log } from "./logger";
 
 export const GetAvailableSkills = (directory: string) => {
   return tool({
@@ -34,6 +35,7 @@ export const GetAvailableSkills = (directory: string) => {
         .describe("Search query to filter skills (matches name and description)")
     },
     async execute(args) {
+      await log(`[SKILLS TOOL] get_available_skills called. directory=${directory} query=${args.query}`);
       const skillsByName = await discoverAllSkills(directory);
       const allSkills = Array.from(skillsByName.values());
 
@@ -81,6 +83,7 @@ export const ReadSkillFile = (directory: string, client: OpencodeClient) => {
         .describe("File to read, relative to skill directory (e.g., 'anthropic-best-practices.md', 'scripts/helper.sh')")
     },
     async execute(args, ctx) {
+      await log(`[SKILLS TOOL] read_skill_file called. directory=${directory} skill=${args.skill} file=${args.filename}`);
       const skillsByName = await discoverAllSkills(directory);
       const allSkills = Array.from(skillsByName.values());
 
@@ -146,6 +149,7 @@ export const RunSkillScript = (directory: string, $: PluginInput["$"]) => {
         .describe("Arguments to pass to the script")
     },
     async execute(args) {
+      await log(`[SKILLS TOOL] run_skill_script called. directory=${directory} skill=${args.skill} script=${args.script}`);
       const skillsByName = await discoverAllSkills(directory);
       const allSkills = Array.from(skillsByName.values());
 
@@ -209,6 +213,7 @@ export const UseSkill = (
         .describe("Name of the skill (e.g., 'brainstorming', 'project:my-skill', 'user:my-skill')")
     },
     async execute(args, ctx) {
+      await log(`[SKILLS TOOL] use_skill called. directory=${directory} skill=${args.skill}`);
       const skillsByName = await discoverAllSkills(directory);
       const allSkills = Array.from(skillsByName.values());
 
