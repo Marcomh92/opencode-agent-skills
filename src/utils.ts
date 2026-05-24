@@ -181,8 +181,10 @@ export async function getSessionContext(
     });
 
     if (response.data) {
-      for (const msg of response.data) {
-        if (msg.info.role === "user" && "model" in msg.info && msg.info.model) {
+      // Iterate from newest to oldest to find the most recent user message
+      for (let i = response.data.length - 1; i >= 0; i--) {
+        const msg = response.data[i];
+        if (msg && msg.info.role === "user" && "model" in msg.info && msg.info.model) {
           return {
             model: msg.info.model,
             agent: msg.info.agent

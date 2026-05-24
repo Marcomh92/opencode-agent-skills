@@ -113,6 +113,16 @@ Each entry must include:
 - **Reason:** Initial implementation was APPENDING new `<available-skills>` blocks on agent switch while leaving old ones in context. This caused the LLM to see multiple (potentially conflicting) skills lists. By tracking and reverting old synthetic messages before injecting new ones, each session now maintains exactly one current `<available-skills>` block.
 - **Files:** `src/plugin.ts`, `src/skills.ts`, `src/utils.ts`
 
+## 2026-05-24 - Fix Agent Detection in Tools After Agent Switch
+- **Branch:** feature/per-agent-skill-permissions
+- **Changes:**
+  - Fixed `getSessionContext()` in `src/utils.ts` to iterate messages from newest to oldest instead of oldest to newest
+  - The function was finding the FIRST user message (original agent) rather than the MOST RECENT user message (current agent after switch)
+  - This caused all tools (`get_available_skills`, `use_skill`, `read_skill_file`, `run_skill_script`) to use the WRONG agent's permissions after an agent switch
+  - Changed array iteration from `for...of` forward loop to reverse `for` loop: `for (let i = response.data.length - 1; i >= 0; i--)`
+- **Reason:** After switching from generic to exploration agent, tools were still applying generic's permissions because they found the first (oldest) user message in the session. The most recent user message contains the correct current agent.
+- **Files:** `src/utils.ts`
+
 ## 2026-05-23 - Remove Unsafe revert() Implementation
 - **Branch:** feature/per-agent-skill-permissions
 - **Changes:**
