@@ -26,7 +26,7 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
-    "@opencode-ai/plugin": "^1.0.115",
+    "@opencode-ai/plugin": "1.18.9",
     "yaml": "^2.8.2",
     "zod": "^4.1.13"
   },
