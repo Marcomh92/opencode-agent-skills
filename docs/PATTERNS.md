@@ -88,7 +88,7 @@ This document defines common code patterns, idioms, and conventions used consist
 
 ## PAT-008: Async Logging
 
-**Pattern:** All logging is async (`Promise<void>`) and writes to a single debug log file.
+**Pattern:** All logging is async (`Promise<void>`) and writes to a single debug log file. The default path is `~/.config/opencode/opencode-agent-skills/debug.log` (resolved via `os.homedir()`, works on Linux and Windows). The path is overridable via the `OPENCODE_AGENT_SKILLS_LOG_FILE` environment variable; the parent directory is auto-created on first write.
 
 **When to use:** All diagnostic logging in the plugin.
 
@@ -96,4 +96,4 @@ This document defines common code patterns, idioms, and conventions used consist
 
 **Source:** `src/logger.ts`
 
-**Rationale:** Avoids blocking the event loop. Failures are silently ignored to prevent logging errors from breaking functionality.
+**Rationale:** Avoids blocking the event loop. Failures are silently ignored to prevent logging errors from breaking functionality. Portability via `os.homedir()` and the env-var override let the log work across operating systems without code changes.

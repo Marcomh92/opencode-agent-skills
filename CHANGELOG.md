@@ -18,6 +18,18 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 
 ## [Unreleased]
 
+### Added
+
+- Debug log location can be overridden via the `OPENCODE_AGENT_SKILLS_LOG_FILE` environment variable. The default path is `~/.config/opencode/opencode-agent-skills/debug.log` on both Linux and Windows.
+
+### Changed
+
+- Debug log path now resolves via `os.homedir()` instead of a hardcoded Windows user directory, so the log is written on Linux as well as Windows. Parent directory is auto-created on first write.
+
+### Fixed
+
+- Added `.gitattributes` line-ending policy: `*.ts`, `*.md`, and `*.json` files are pinned to LF; `*.cmd` and `*.ps1` stay CRLF. Prevents the CRLF frontmatter parse bug caused by mixed line endings across platforms.
+
 ## [0.7.0]
 
 ### Added

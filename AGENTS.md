@@ -161,3 +161,72 @@ For example: `bd create --help` shows `--parent`, `--deps`, `--assignee`, etc.
 - ❌ Do NOT use external issue trackers
 - ❌ Do NOT duplicate tracking systems
 - ❌ Do NOT clutter repo root with planning documents
+
+## Bug Report Management
+
+Bug reports live in `known_issues/`.
+
+- **When fixing:** Check `known_issues/*.md`, read if found, mark **FIXED** with date after resolving, move to `known_issues/fixed/`
+- **When creating:** Check `known_issues/` AND `known_issues/fixed/` for duplicates, use next `BUG-xxx` number, name: `BUG-xxx-short-description.md`
+
+## GitNexus — Code Intelligence
+
+Gitnexus can be used to get a deep architectural view of the codebase so you are less likely to miss dependencies, break call chains, and ship blind edits.
+
+This project is indexed by GitNexus as repo **opencode-agent-skills**. All gitnexus_* tools are MCP tool calls — invoke them directly, **never** via the bash tool. Always pass `repo: "opencode-agent-skills"` explicitly.
+
+#### Index maintenance (escape hatch — only when needed)
+
+The only gitnexus action that uses the bash tool is rebuilding a stale index. Verify staleness first with `gitnexus_query({query: "project overview", repo: "opencode-agent-skills"})`. If it reports a stale or missing index, run from the project root:
+
+```
+gitnexus analyze
+```
+
+Skip this step if `project overview` returns current results.
+
+### Always Do
+
+- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `gitnexus_impact({target: "symbolName", direction: "upstream", repo: "opencode-agent-skills"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
+- **MUST run `gitnexus_detect_changes({repo: "opencode-agent-skills"})` before committing** to verify your changes only affect expected symbols and execution flows.
+- **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
+- When exploring unfamiliar code, use `gitnexus_query({query: "concept", repo: "opencode-agent-skills"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
+- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName", repo: "opencode-agent-skills"})`.
+- **MUST pass `repo: "opencode-agent-skills"` in every gitnexus_* tool call** — the parameter is technically optional with one indexed repo, but omitting it produces errors in this environment.
+
+### Never Do
+
+- NEVER edit a function, class, or method without first running `gitnexus_impact` on it.
+- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
+- NEVER rename symbols with find-and-replace — use `gitnexus_rename` which understands the call graph.
+- NEVER commit changes without running `gitnexus_detect_changes()` to check affected scope.
+- NEVER invoke gitnexus_* tools via the bash tool — they are MCP tools. The single bash exception is `gitnexus analyze` for rebuilding a stale index.
+
+### Quick Reference
+
+> Every example below includes `repo: "opencode-agent-skills"`. Do not omit it.
+
+#### Discover Repositories
+```
+gitnexus_list_repos()
+```
+
+#### Codebase Overview & Staleness Check
+```
+gitnexus_query({query: "project overview", repo: "opencode-agent-skills"})
+```
+
+#### Functional Areas (Clusters)
+```
+gitnexus_cypher({query: "MATCH (c:Community) RETURN c.heuristicLabel, c.symbolCount, c.cohesion ORDER BY c.symbolCount DESC", repo: "opencode-agent-skills"})
+```
+
+#### Execution Flows (Processes)
+```
+gitnexus_cypher({query: "MATCH (p:Process) RETURN p.heuristicLabel, p.stepCount, p.processType ORDER BY p.stepCount DESC", repo: "opencode-agent-skills"})
+```
+
+#### Step-by-Step Execution Trace
+```
+gitnexus_cypher({query: "MATCH (s)-[r:CodeRelation {type: 'STEP_IN_PROCESS'}]->(p:Process) WHERE p.heuristicLabel = 'ProcessName' RETURN s.name, r.step ORDER BY r.step", repo: "opencode-agent-skills"})
+```

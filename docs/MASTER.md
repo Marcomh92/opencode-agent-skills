@@ -69,3 +69,4 @@ This plugin provides skill discovery, loading, and management capabilities for O
 | **Permission rule** | A glob pattern paired with an action (`allow`, `deny`, `ask`) that controls whether an agent may use a skill |
 | **Superpowers mode** | Optional mode that auto-injects the `using-superpowers` skill content on session start |
 | **Compaction resilience** | The property of re-injecting skills after OpenCode's context compaction event to maintain availability across long sessions |
+| **`OPENCODE_AGENT_SKILLS_LOG_FILE`** | Optional environment variable that overrides the default debug log path (`~/.config/opencode/opencode-agent-skills/debug.log`). Set to an empty string to use the default. See PAT-008. |

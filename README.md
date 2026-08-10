@@ -98,6 +98,8 @@ If Hugging Face downloads are blocked or slow from your network, point Transform
 HF_ENDPOINT=https://hf-mirror.com opencode
 ```
 
+Debug logs are written to `~/.config/opencode/opencode-agent-skills/debug.log` on Linux and Windows. Override the location by setting `OPENCODE_AGENT_SKILLS_LOG_FILE` before launching OpenCode (set to an empty string to use the default).
+
 ## Alternatives
 
 - OpenCode's built-in skills support - Native skill discovery and loading through the built-in `skill` tool

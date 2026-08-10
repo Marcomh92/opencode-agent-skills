@@ -25,6 +25,7 @@ Tests are colocated with source files:
 | `src/permissions.ts` | `src/permissions.test.ts` | Pattern matching, permission merging, evaluation |
 | `src/utils.ts` | `src/utils.test.ts` | Levenshtein distance, fuzzy matching |
 | `src/embeddings.ts` | `src/embeddings.test.ts` | Embedding generation, cosine similarity, skill matching |
+| `src/logger.ts` | `src/logger.test.ts` | Default path resolution, env var override, mkdir auto-create, silent error swallowing |
 
 ## Mocking Rules
 
