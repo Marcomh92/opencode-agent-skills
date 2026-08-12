@@ -41,8 +41,9 @@ The Permissions subsystem controls which skills each AI agent is allowed to acce
    - Caches result per agent name
 
 4. **Skill Access Check** (`isSkillAllowed`, `evaluateSkillPermission`)
-   - Sorts rules: specific patterns first, then wildcards
-   - Returns action for first matching pattern
+   - Iterates rules in **config order**; first matching rule wins (no specificity sort)
+   - For tag patterns (`tag:capability:*` / `tag:audience:*` / `tag:maturity:*`), matches against the skill's frontmatter `metadata`; metadata-less skills default to `audience: "all"` + `maturity: "stable"` (no `capability` default — a `tag:capability:*` rule against a metadata-less skill falls through, no false allow)
+   - Unrecognised tag kinds (e.g. `tag:priority:high`) fall through to the next rule (lenient matcher per `07-tag-skills/skill-permissions.md:193`)
    - `isSkillAllowed` returns `true` for `allow` and `ask`, `false` for `deny`
 
 ## Permission Rule Format
@@ -92,16 +93,28 @@ Patterns use glob syntax with `*` wildcard:
 | `git-*` | `git-helper`, `git-status` | `my-git`, `pdf` |
 | `*-helper` | `git-helper`, `pdf-helper` | `helper-git` |
 | `exact-name` | `exact-name`, `Exact-Name` | `exact-name-2` |
+| `tag:capability:<value>` | skills whose `metadata.capability === <value>` | anything else |
+| `tag:audience:<value>` | skills whose `metadata.audience === <value>` (or metadata-less skills, which default to `audience: "all"`) | anything else |
+| `tag:maturity:<value>` | skills whose `metadata.maturity === <value>` (or metadata-less skills, which default to `maturity: "stable"`) | anything else |
 
-Matching is case-insensitive. Special regex characters in patterns are escaped.
+Matching is case-insensitive. Special regex characters in glob patterns are escaped.
+
+Tag patterns are matched against the skill's frontmatter `metadata`, not against `skillName`. Unrecognised tag kinds (e.g. `tag:priority:high`) fall through to the next rule (lenient matcher per `07-tag-skills/skill-permissions.md:193`). Metadata-less skills default `audience` to `"all"` and `maturity` to `"stable"` (`07-tag-skills/tag-schema.md:100`); `capability` has no default, so a `tag:capability:*` rule against a metadata-less skill falls through to the next rule (no false allow).
 
 ## Permission Resolution Order
 
-Later overrides earlier for the same pattern:
+For rule ordering within a single agent's config:
+
+1. Default: `allow all` (when no rule matches)
+2. Rules iterate in **config order**, first match wins (`07-tag-skills/skill-permissions.md:46`). The matcher does NOT sort by specificity — putting a wildcard before a specific pattern means the wildcard wins.
+
+For loading order between config sources:
 
 1. Default: `allow all`
 2. Global config (`opencode.json`)
 3. Agent markdown frontmatter
+
+Later overrides earlier for the same pattern.
 
 ## Data Model
 
@@ -132,8 +145,9 @@ Later overrides earlier for the same pattern:
 - **INV-001:** The custom permission key is `opencode-agent-skills`, never `skill`.
 - **INV-002:** Empty permission list defaults to `allow`.
 - **INV-003:** No matching pattern defaults to `allow`.
-- **INV-004:** Specific patterns take precedence over wildcard patterns during evaluation.
+- **INV-004:** Rules iterate in **config order**; first match wins. There is no specificity sort — a wildcard listed before a specific pattern means the wildcard wins.
 - **INV-005:** Agent permissions override global permissions for the same pattern.
+- **INV-006 (Phase 2 WS2.3):** Tag patterns (`tag:capability:*` / `tag:audience:*` / `tag:maturity:*`) match against the skill's frontmatter `metadata`. Metadata-less skills default to `audience: "all"` + `maturity: "stable"` (`07-tag-skills/tag-schema.md:100` migration promise); `capability` has no default, so a `tag:capability:*` rule against a metadata-less skill falls through to the next rule. Unrecognised tag kinds fall through (lenient matcher per `07-tag-skills/skill-permissions.md:193`).
 
 ## Dependencies
 

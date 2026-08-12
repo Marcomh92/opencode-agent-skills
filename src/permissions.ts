@@ -282,29 +282,57 @@ export function matchPattern(name: string, pattern: string): boolean {
 
 /**
  * Evaluate whether a skill is allowed for the given permissions.
- * Returns the action for the first matching pattern, checking
- * specific patterns before wildcards.
+ *
+ * Patterns starting with `tag:` are matched against the skill's frontmatter
+ * `metadata` (Phase 2 WS2.3). Closed vocabulary of recognised tag kinds:
+ * `tag:capability:<value>`, `tag:audience:<value>`, `tag:maturity:<value>`.
+ * Unrecognised tag kinds fall through to the next rule (lenient matcher
+ * per `07-tag-skills/skill-permissions.md:193`).
+ *
+ * Defaults from `tag-schema.md:100` apply when `metadata` is absent or when
+ * individual fields are missing: `audience` defaults to `"all"`,
+ * `maturity` defaults to `"stable"`. `capability` has no default, so a
+ * `tag:capability:*` rule against a metadata-less skill falls through
+ * rather than producing a false allow.
+ *
+ * Rules are iterated in config order; the first matching rule wins
+ * (`07-tag-skills/skill-permissions.md:46`).
+ *
+ * Non-tag patterns remain glob-matched against `skillName` as before.
  *
  * @param skillName - Name of the skill to evaluate
  * @param permissions - Agent permissions to check against
+ * @param metadata - Optional skill frontmatter `metadata` (enables `tag:` patterns)
  * @returns The permission action (allow/deny/ask)
  */
 export function evaluateSkillPermission(
   skillName: string,
   permissions: AgentPermissions,
+  metadata?: Record<string, string>,
 ): PermissionAction {
   if (permissions.skill.length === 0) {
     return "allow";
   }
 
-  // Sort: specific patterns first, then wildcards
-  const sorted = [...permissions.skill].sort((a, b) => {
-    if (a.pattern === "*" && b.pattern !== "*") return 1;
-    if (b.pattern === "*" && a.pattern !== "*") return -1;
-    return b.pattern.length - a.pattern.length;
-  });
+  // Defaults from tag-schema.md:100 — applied structurally, not via string parsing.
+  const effectiveMetadata: Record<string, string> = {
+    ...(metadata ?? {}),
+    audience: metadata?.audience ?? "all",
+    maturity: metadata?.maturity ?? "stable",
+  };
 
-  for (const rule of sorted) {
+  // First-match-wins, iterated in config order (07-tag-skills/skill-permissions.md:46).
+  for (const rule of permissions.skill) {
+    // Tag-based patterns: matched against frontmatter `metadata`, not `skillName`.
+    if (rule.pattern.startsWith("tag:")) {
+      const [kind, value] = rule.pattern.slice(4).split(":", 2);
+      if (kind === "capability" && effectiveMetadata.capability === value) return rule.action;
+      if (kind === "audience"   && effectiveMetadata.audience   === value) return rule.action;
+      if (kind === "maturity"   && effectiveMetadata.maturity   === value) return rule.action;
+      // Lenient: unrecognised tag kind falls through to the next rule.
+      continue;
+    }
+
     if (matchPattern(skillName, rule.pattern)) {
       return rule.action;
     }
@@ -318,13 +346,15 @@ export function evaluateSkillPermission(
  *
  * @param skillName - Name of the skill to check
  * @param permissions - Agent permissions to check against
+ * @param metadata - Optional skill frontmatter `metadata` (enables `tag:` patterns)
  * @returns True if the skill is not denied
  */
 export function isSkillAllowed(
   skillName: string,
   permissions: AgentPermissions,
+  metadata?: Record<string, string>,
 ): boolean {
-  return evaluateSkillPermission(skillName, permissions) !== "deny";
+  return evaluateSkillPermission(skillName, permissions, metadata) !== "deny";
 }
 
 /**

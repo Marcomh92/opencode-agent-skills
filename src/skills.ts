@@ -51,6 +51,7 @@ interface Skill {
   label: SkillLabel;
   scripts: Script[];
   template: string;
+  metadata?: Record<string, string>;
 }
 
 /**
@@ -168,7 +169,8 @@ async function parseSkillFile(
     namespace: frontmatter.metadata?.namespace,
     label,
     scripts,
-    template: skillContent
+    template: skillContent,
+    metadata: frontmatter.metadata,
   };
 }
 
@@ -376,7 +378,7 @@ export async function getSkillSummaries(
   if (permissions) {
     filtered = [];
     for (const skill of skills) {
-      const allowed = isSkillAllowed(skill.name, permissions);
+      const allowed = isSkillAllowed(skill.name, permissions, skill.metadata);
       await log(`[SKILLS DISCOVERY] Skill "${skill.name}" allowed=${allowed}`);
       if (allowed) {
         filtered.push(skill);
@@ -425,7 +427,7 @@ export async function injectSkillsList(
   if (permissions) {
     filtered = [];
     for (const skill of skills) {
-      const allowed = isSkillAllowed(skill.name, permissions);
+      const allowed = isSkillAllowed(skill.name, permissions, skill.metadata);
       await log(`[SKILLS DISCOVERY] Skill "${skill.name}" allowed=${allowed}`);
       if (allowed) {
         filtered.push(skill);

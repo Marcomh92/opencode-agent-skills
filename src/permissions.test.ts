@@ -163,11 +163,43 @@ describe("evaluateSkillPermission", () => {
     expect(evaluateSkillPermission("pdf", permissions)).toBe("deny");
   });
 
-  test("specific pattern takes precedence over wildcard", () => {
+  test("first matching rule wins in config order (two unrelated names)", () => {
+    const permissions: AgentPermissions = {
+      skill: [
+        { pattern: "A", action: "allow" },
+        { pattern: "B", action: "deny" },
+      ],
+    };
+    expect(evaluateSkillPermission("A", permissions)).toBe("allow");
+    expect(evaluateSkillPermission("B", permissions)).toBe("deny");
+  });
+
+  test("reversed order — first rule still wins (no specificity overrides)", () => {
+    const permissions: AgentPermissions = {
+      skill: [
+        { pattern: "B", action: "deny" },
+        { pattern: "A", action: "allow" },
+      ],
+    };
+    expect(evaluateSkillPermission("A", permissions)).toBe("allow");
+    expect(evaluateSkillPermission("B", permissions)).toBe("deny");
+  });
+
+  test("wildcard earlier than specific — wildcard wins (config-order)", () => {
     const permissions: AgentPermissions = {
       skill: [
         { pattern: "*", action: "deny" },
         { pattern: "git-helper", action: "allow" },
+      ],
+    };
+    expect(evaluateSkillPermission("git-helper", permissions)).toBe("deny");
+  });
+
+  test("specific earlier than wildcard — specific wins (config-order)", () => {
+    const permissions: AgentPermissions = {
+      skill: [
+        { pattern: "git-helper", action: "allow" },
+        { pattern: "*", action: "deny" },
       ],
     };
     expect(evaluateSkillPermission("git-helper", permissions)).toBe("allow");
@@ -208,14 +240,24 @@ describe("evaluateSkillPermission", () => {
     expect(evaluateSkillPermission("pdf", permissions)).toBe("allow");
   });
 
-  test("longer specific pattern takes precedence over shorter specific pattern", () => {
+  test("config order wins over pattern length (longer specific listed first)", () => {
+    const permissions: AgentPermissions = {
+      skill: [
+        { pattern: "git-helper", action: "allow" },
+        { pattern: "git-*", action: "deny" },
+      ],
+    };
+    expect(evaluateSkillPermission("git-helper", permissions)).toBe("allow");
+  });
+
+  test("config order wins over pattern length (shorter prefix listed first)", () => {
     const permissions: AgentPermissions = {
       skill: [
         { pattern: "git-*", action: "deny" },
         { pattern: "git-helper", action: "allow" },
       ],
     };
-    expect(evaluateSkillPermission("git-helper", permissions)).toBe("allow");
+    expect(evaluateSkillPermission("git-helper", permissions)).toBe("deny");
   });
 
   test("case insensitive pattern matching", () => {
@@ -223,6 +265,215 @@ describe("evaluateSkillPermission", () => {
       skill: [{ pattern: "Git-Helper", action: "deny" }],
     };
     expect(evaluateSkillPermission("git-helper", permissions)).toBe("deny");
+  });
+
+  test("tag capability match returns deny", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "tag:capability:web", action: "deny" }],
+    };
+    expect(evaluateSkillPermission("any", permissions, { capability: "web" })).toBe("deny");
+  });
+
+  test("tag capability mismatch defaults to allow", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "tag:capability:web", action: "deny" }],
+    };
+    expect(evaluateSkillPermission("any", permissions, { capability: "db" })).toBe("allow");
+  });
+
+  test("tag audience match returns deny", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "tag:audience:reviewer", action: "deny" }],
+    };
+    expect(evaluateSkillPermission("any", permissions, { audience: "reviewer" })).toBe("deny");
+  });
+
+  test("tag audience mismatch defaults to allow", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "tag:audience:reviewer", action: "deny" }],
+    };
+    expect(evaluateSkillPermission("any", permissions, { audience: "implementer" })).toBe("allow");
+  });
+
+  test("tag maturity match returns ask", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "tag:maturity:experimental", action: "ask" }],
+    };
+    expect(evaluateSkillPermission("any", permissions, { maturity: "experimental" })).toBe("ask");
+  });
+
+  test("tag maturity mismatch defaults to allow", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "tag:maturity:experimental", action: "ask" }],
+    };
+    expect(evaluateSkillPermission("any", permissions, { maturity: "stable" })).toBe("allow");
+  });
+
+  test("unrecognised tag kind falls through to allow", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "tag:priority:high", action: "deny" }],
+    };
+    expect(evaluateSkillPermission("any", permissions, { capability: "web" })).toBe("allow");
+  });
+
+  test("tag rule without metadata falls through to allow", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "tag:capability:web", action: "deny" }],
+    };
+    expect(evaluateSkillPermission("any", permissions, undefined)).toBe("allow");
+  });
+
+  test("tag rule with empty metadata falls through to allow", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "tag:capability:web", action: "deny" }],
+    };
+    expect(evaluateSkillPermission("any", permissions, {})).toBe("allow");
+  });
+
+  test("wildcard before tag pattern — wildcard wins (config-order, tag rule never consulted)", () => {
+    const permissions: AgentPermissions = {
+      skill: [
+        { pattern: "*", action: "allow" },
+        { pattern: "tag:capability:web", action: "deny" },
+      ],
+    };
+    expect(evaluateSkillPermission("any", permissions, { capability: "web" })).toBe("allow");
+  });
+
+  test("tag pattern before wildcard — tag wins (config-order)", () => {
+    const permissions: AgentPermissions = {
+      skill: [
+        { pattern: "tag:capability:web", action: "deny" },
+        { pattern: "*", action: "allow" },
+      ],
+    };
+    expect(evaluateSkillPermission("any", permissions, { capability: "web" })).toBe("deny");
+  });
+
+  test("name pattern before tag pattern — name wins (config-order)", () => {
+    const permissions: AgentPermissions = {
+      skill: [
+        { pattern: "git-*", action: "allow" },
+        { pattern: "tag:capability:git", action: "deny" },
+      ],
+    };
+    expect(evaluateSkillPermission("git-helper", permissions, { capability: "git" })).toBe("allow");
+  });
+
+  test("tag pattern before name pattern — tag wins (config-order)", () => {
+    const permissions: AgentPermissions = {
+      skill: [
+        { pattern: "tag:capability:git", action: "deny" },
+        { pattern: "git-*", action: "allow" },
+      ],
+    };
+    expect(evaluateSkillPermission("git-helper", permissions, { capability: "git" })).toBe("deny");
+  });
+
+  test("exact-name match still works with undefined metadata", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "git-helper", action: "deny" }],
+    };
+    expect(evaluateSkillPermission("git-helper", permissions, undefined)).toBe("deny");
+  });
+
+  test("prefix wildcard match still works with undefined metadata", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "git-*", action: "deny" }],
+    };
+    expect(evaluateSkillPermission("git-helper", permissions, undefined)).toBe("deny");
+  });
+
+  test("empty permissions with wildcard skill name defaults to allow", () => {
+    const permissions: AgentPermissions = { skill: [] };
+    expect(evaluateSkillPermission("*", permissions)).toBe("allow");
+  });
+
+  // --- Defaults from tag-schema.md:100 (metadata-less skills) ---
+
+  test("metadata-less defaults audience to 'all' (tag:audience:all matches)", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "tag:audience:all", action: "deny" }],
+    };
+    expect(evaluateSkillPermission("any", permissions, undefined)).toBe("deny");
+  });
+
+  test("metadata-less defaults maturity to 'stable' (tag:maturity:stable matches)", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "tag:maturity:stable", action: "deny" }],
+    };
+    expect(evaluateSkillPermission("any", permissions, undefined)).toBe("deny");
+  });
+
+  test("metadata-less does NOT default capability — tag:capability rule falls through to allow", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "tag:capability:web", action: "deny" }],
+    };
+    expect(evaluateSkillPermission("any", permissions, undefined)).toBe("allow");
+  });
+
+  test("metadata without audience field defaults audience to 'all'", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "tag:audience:all", action: "deny" }],
+    };
+    expect(evaluateSkillPermission("any", permissions, { maturity: "stable" })).toBe("deny");
+  });
+
+  test("empty metadata object defaults audience to 'all'", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "tag:audience:all", action: "deny" }],
+    };
+    expect(evaluateSkillPermission("any", permissions, {})).toBe("deny");
+  });
+
+  test("empty metadata object defaults maturity to 'stable'", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "tag:maturity:stable", action: "deny" }],
+    };
+    expect(evaluateSkillPermission("any", permissions, {})).toBe("deny");
+  });
+
+  // --- Lenient matcher for unrecognised tag kinds ---
+
+  test("unrecognised tag kind falls through to allow (no metadata)", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "tag:priority:high", action: "deny" }],
+    };
+    expect(evaluateSkillPermission("any", permissions, undefined)).toBe("allow");
+  });
+
+  // --- Config-order tie-break and edge cases ---
+
+  test("config-order tie-break — each named rule resolves correctly", () => {
+    const permissions: AgentPermissions = {
+      skill: [
+        { pattern: "alpha", action: "allow" },
+        { pattern: "beta", action: "deny" },
+      ],
+    };
+    expect(evaluateSkillPermission("alpha", permissions)).toBe("allow");
+    expect(evaluateSkillPermission("beta", permissions)).toBe("deny");
+  });
+
+  test("tag rule before name rule — tag wins when both could match", () => {
+    const permissions: AgentPermissions = {
+      skill: [
+        { pattern: "tag:capability:git", action: "allow" },
+        { pattern: "git-helper", action: "deny" },
+      ],
+    };
+    expect(evaluateSkillPermission("git-helper", permissions, { capability: "git" })).toBe("allow");
+  });
+
+  test("first-match-wins via unrelated rule — wildcard never reached", () => {
+    const permissions: AgentPermissions = {
+      skill: [
+        { pattern: "foo", action: "allow" },
+        { pattern: "bar", action: "deny" },
+        { pattern: "*", action: "ask" },
+      ],
+    };
+    expect(evaluateSkillPermission("bar", permissions)).toBe("deny");
   });
 });
 
@@ -276,13 +527,44 @@ describe("isSkillAllowed", () => {
     expect(isSkillAllowed("git-helper", permissions)).toBe(true);
   });
 
-  test("specific allow overrides wildcard deny", () => {
+  test("wildcard deny before specific allow — wildcard wins (config-order)", () => {
     const permissions: AgentPermissions = {
       skill: [
         { pattern: "*", action: "deny" },
         { pattern: "git-helper", action: "allow" },
       ],
     };
+    expect(isSkillAllowed("git-helper", permissions)).toBe(false);
+  });
+
+  test("specific allow before wildcard deny — specific wins (config-order)", () => {
+    const permissions: AgentPermissions = {
+      skill: [
+        { pattern: "git-helper", action: "allow" },
+        { pattern: "*", action: "deny" },
+      ],
+    };
     expect(isSkillAllowed("git-helper", permissions)).toBe(true);
+  });
+
+  test("tag deny with matching metadata returns false", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "tag:capability:web", action: "deny" }],
+    };
+    expect(isSkillAllowed("any", permissions, { capability: "web" })).toBe(false);
+  });
+
+  test("tag ask with matching metadata returns true", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "tag:maturity:experimental", action: "ask" }],
+    };
+    expect(isSkillAllowed("any", permissions, { maturity: "experimental" })).toBe(true);
+  });
+
+  test("tag without matching metadata falls through to allowed", () => {
+    const permissions: AgentPermissions = {
+      skill: [{ pattern: "tag:capability:web", action: "deny" }],
+    };
+    expect(isSkillAllowed("any", permissions, {})).toBe(true);
   });
 });

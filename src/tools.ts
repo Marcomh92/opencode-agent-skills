@@ -56,7 +56,7 @@ export const GetAvailableSkills = (
       if (permissions) {
         filtered = [];
         for (const skill of allSkills) {
-          const allowed = isSkillAllowed(skill.name, permissions);
+          const allowed = isSkillAllowed(skill.name, permissions, skill.metadata);
           await log(`[SKILLS TOOL] Skill "${skill.name}" allowed=${allowed}`);
           if (allowed) {
             filtered.push(skill);
@@ -76,7 +76,7 @@ export const GetAvailableSkills = (
       if (filtered.length === 0) {
         if (args.query) {
           const visibleSkillNames = allSkills
-            .filter((skill) => !permissions || isSkillAllowed(skill.name, permissions))
+            .filter((skill) => !permissions || isSkillAllowed(skill.name, permissions, skill.metadata))
             .map(s => s.name);
           const suggestion = findClosestMatch(args.query, visibleSkillNames);
 
@@ -125,7 +125,7 @@ export const ReadSkillFile = (
 
       // Check permission before resolving skill
       if (permissions) {
-        const allowed = isSkillAllowed(args.skill, permissions);
+        const allowed = isSkillAllowed(args.skill, permissions, resolveSkill(args.skill, skillsByName)?.metadata);
         await log(`[SKILLS TOOL] Skill "${args.skill}" allowed=${allowed}`);
         if (!allowed) {
           return `Access denied: skill "${args.skill}" is not available to this agent.`;
@@ -210,7 +210,7 @@ export const RunSkillScript = (
 
       // Check permission before resolving skill
       if (permissions) {
-        const allowed = isSkillAllowed(args.skill, permissions);
+        const allowed = isSkillAllowed(args.skill, permissions, resolveSkill(args.skill, skillsByName)?.metadata);
         await log(`[SKILLS TOOL] Skill "${args.skill}" allowed=${allowed}`);
         if (!allowed) {
           return `Access denied: skill "${args.skill}" is not available to this agent.`;
@@ -289,7 +289,7 @@ export const UseSkill = (
 
       // Check permission before resolving skill
       if (permissions) {
-        const allowed = isSkillAllowed(args.skill, permissions);
+        const allowed = isSkillAllowed(args.skill, permissions, resolveSkill(args.skill, skillsByName)?.metadata);
         await log(`[SKILLS TOOL] Skill "${args.skill}" allowed=${allowed}`);
         if (!allowed) {
           return `Access denied: skill "${args.skill}" is not available to this agent.`;
