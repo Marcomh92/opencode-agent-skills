@@ -78,8 +78,12 @@ function parsePermissionRules(
 export async function loadGlobalPermissions(
   projectDir: string,
 ): Promise<AgentPermissions> {
+  // Empty ruleset = allow all (evaluateSkillPermission treats empty as "allow").
+  // Using a literal `*: allow` rule here would occupy index 0 during merge and
+  // hoist any agent-level `*: deny` to the front, shadowing the agent's
+  // specific allow rules (first-match-wins is config-order, not specificity).
   const defaultPerms: AgentPermissions = {
-    skill: [{ pattern: "*", action: "allow" }],
+    skill: [],
   };
 
   const configPaths = [
