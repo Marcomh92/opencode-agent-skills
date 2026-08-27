@@ -2,6 +2,7 @@ import type { PluginInput } from "@opencode-ai/plugin";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import YAML from "yaml";
+import { log } from "./logger";
 
 /**
  * Result from finding a file in a directory.
@@ -150,15 +151,49 @@ export async function injectSyntheticContent(
   text: string,
   context?: SessionContext
 ): Promise<void> {
-  await client.session.prompt({
-    path: { id: sessionID },
-    body: {
-      noReply: true,
-      model: context?.model,
-      agent: context?.agent,
-      parts: [{ type: "text", text, synthetic: true }],
-    },
-  });
+  await log(`[INJECT] ENTER injectSyntheticContent session=${sessionID} len=${text.length} agent=${context?.agent ?? "-"} model=${context?.model?.modelID ?? "-"}`);
+  await log(`[INJECT] head=${JSON.stringify(text.slice(0, 120))}`);
+
+  let ok = false;
+  let errMsg = "";
+  try {
+    await client.session.prompt({
+      path: { id: sessionID },
+      body: {
+        noReply: true,
+        model: context?.model,
+        agent: context?.agent,
+        parts: [{ type: "text", text, synthetic: true }],
+      },
+    });
+    ok = true;
+  } catch (err) {
+    errMsg = (err as Error).message;
+  }
+  await log(`[INJECT] prompt() ok=${ok}${errMsg ? " err=" + errMsg : ""}`);
+
+  // Probe: does the synthetic part land in the session's persisted messages?
+  try {
+    const resp = await client.session.messages({ path: { id: sessionID }, query: { limit: 5 } });
+    const msgs = (resp.data ?? []) as any[];
+    const total = msgs.length;
+    let syntheticCount = 0;
+    let headMatch = false;
+    const probe = text.slice(0, 60);
+    for (const m of msgs) {
+      const parts = m.parts ?? [];
+      for (const p of parts) {
+        if (p && p.synthetic === true) syntheticCount++;
+        if (p && p.type === "text" && typeof p.text === "string" && p.text.includes(probe)) {
+          headMatch = true;
+        }
+      }
+    }
+    const last = msgs[msgs.length - 1];
+    await log(`[INJECT] verify totalMessages=${total} syntheticPartsAcrossSession=${syntheticCount} probeInSession=${headMatch} lastMsgRole=${last?.info?.role} lastMsgParts=${(last?.parts ?? []).length}`);
+  } catch (err) {
+    await log(`[INJECT] verify (messages) failed: ${(err as Error).message}`);
+  }
 }
 
 /**

@@ -439,7 +439,10 @@ export async function injectSkillsList(
 
   await log(`[SKILLS DISCOVERY] Skills after filtering: ${filtered.length} (removed ${skills.length - filtered.length})`);
 
-  if (filtered.length === 0) return;
+  if (filtered.length === 0) {
+    await log(`[SKILLS DISCOVERY] EARLY RETURN: no skills after filtering, skipping injection`);
+    return;
+  }
 
   const skillsList = filtered
     .map((s) => `- ${s.name}: ${s.description}`)

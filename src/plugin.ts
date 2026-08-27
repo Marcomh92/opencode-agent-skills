@@ -118,6 +118,7 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
       const sessionID = output.message.sessionID;
       const agentName = output.message.agent;
       const isFirstMessage = !setupCompleteSessions.has(sessionID);
+      await log(`[CHAT.MSG] hook fired session=${sessionID} agent=${agentName ?? "-"} isFirstMessage=${isFirstMessage}`);
 
       if (isFirstMessage) {
         try {
