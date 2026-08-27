@@ -3,7 +3,7 @@
 A dynamic skills plugin for OpenCode that provides tools for loading and using reusable AI agent skills.
 
 > [!NOTE]
-> OpenCode now includes first-party support for agent skills, including native skill discovery and a built-in `skill` tool. For most users, this plugin is no longer necessary. It remains available in maintenance mode for users who depend on its extra behavior, such as automatic semantic skill matching, synthetic context injection, compaction reinjection, Superpowers bootstrapping, and helper tools for reading skill files or running skill scripts.
+> OpenCode now includes first-party support for agent skills, including native skill discovery and a built-in `skill` tool. For most users, this plugin is no longer necessary. It remains available in maintenance mode for users who depend on its extra behavior, such as synthetic context injection, compaction reinjection, Superpowers bootstrapping, and helper tools for reading skill files or running skill scripts. The automatic per-message semantic skill suggestion prompt is currently disabled; only the assistant tools and the startup-time skill list injection are active.
 
 ## Features
 
@@ -142,9 +142,7 @@ On session start, the plugin automatically injects a list of all discovered skil
 
 ### Automatic Skill Matching
 
-After the initial skills list is injected, the plugin monitors subsequent messages and uses semantic similarity to detect when a message relates to an available skill. When matches are found, it injects a prompt encouraging the agent to evaluate and load the relevant skills.
-
-This happens automatically - you don't need to remember skill names or explicitly request them.
+> **Currently disabled.** The plugin no longer injects the per-message `<skill-evaluation-required>` prompt that previously nudged the agent to load relevant skills based on semantic similarity. The original prompt was misleading the model into announcing skill decisions to users, and similarity scoring surfaced too many false positives. The `formatMatchedSkillsInjection` function and the matching code path are preserved in `src/plugin.ts` so the prompt can be restored once it is improved; the embedding model still precomputes skill description embeddings at startup. See `CHANGELOG.md` and `docs/features/PLUGIN_CORE.md` INV-005.
 
 ### Superpowers Mode (optional)
 

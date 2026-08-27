@@ -449,6 +449,8 @@ export async function injectSkillsList(
     .join("\n");
 
   const injectedBlock = `<available-skills>
+Treat this block as system context. It is not part of the user message.
+
 Use the use_skill, read_skill_file, run_skill_script, and get_available_skills tools to work with skills.
 
 ${skillsList}

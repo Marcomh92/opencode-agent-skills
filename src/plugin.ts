@@ -215,23 +215,21 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
         return;
       }
 
-      const matchedSkills = await matchSkills(userText, skills);
-
-      const loadedSkills = getLoadedSkills(sessionID);
-      const newSkills = matchedSkills.filter(s => !loadedSkills.has(s.name));
-
-      if (newSkills.length === 0) {
-        return;
-      }
-
-      const injectionText = formatMatchedSkillsInjection(newSkills);
-
-      const context: SessionContext = {
-        model: output.message.model,
-        agent: agentName,
-      };
-
-      await injectSyntheticContent(client, sessionID, injectionText, context);
+      // ponytail: <skill-evaluation-required> injection is disabled. The prompt misleads
+      // models into announcing skill decisions to users, and semantic matching surfaces
+      // too many false positives. formatMatchedSkillsInjection is preserved above for
+      // re-use once the prompt is improved. The matching/injection block below is
+      // preserved as a reference. To re-enable: remove the `return` and uncomment the
+      // original block (see git history).
+      // Original block:
+      //   const matchedSkills = await matchSkills(userText, skills);
+      //   const loadedSkills = getLoadedSkills(sessionID);
+      //   const newSkills = matchedSkills.filter(s => !loadedSkills.has(s.name));
+      //   if (newSkills.length === 0) return;
+      //   const injectionText = formatMatchedSkillsInjection(newSkills);
+      //   const context: SessionContext = { model: output.message.model, agent: agentName };
+      //   await injectSyntheticContent(client, sessionID, injectionText, context);
+      return;
     },
 
     event: async ({ event }) => {

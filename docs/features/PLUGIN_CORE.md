@@ -43,11 +43,9 @@ The Plugin Core is the main entry point and lifecycle manager for the opencode-a
    - If changed: injects `<agent-switch-notice>` and re-injects skills list
    - Clears loaded skills tracking for the session
 
-4. **Skill Matching** (`chat.message` handler, subsequent messages)
+4. **Subsequent Messages** (`chat.message` handler)
    - Extracts user text from message parts
-   - Computes semantic similarity with available skills
-   - Filters out already-loaded skills
-   - Injects `<skill-evaluation-required>` prompt with matched skills
+   - Per-message `<skill-evaluation-required>` injection is currently **disabled** (see Invariants and Constraints); the `chat.message` handler returns early without invoking semantic matching or building an injection block. `formatMatchedSkillsInjection` and the original call site are preserved in `src/plugin.ts` for re-enablement.
 
 5. **Compaction** (`session.compacted` event)
    - Re-injects superpowers bootstrap
@@ -66,7 +64,7 @@ The Plugin Core is the main entry point and lifecycle manager for the opencode-a
 [Session Created] --(first message)--> [Skills Injected]
     |                                        |
     |                                        v
-    |                              [User Messages] --(match)--> [Evaluation Prompt]
+    |                              [User Messages] (no per-message injection)
     |                                        |
     |                                        v
     |                              [Agent Changed] --> [Re-inject Skills]
@@ -78,12 +76,15 @@ The Plugin Core is the main entry point and lifecycle manager for the opencode-a
 [Session Deleted] --> [Cleanup State]
 ```
 
+Per-message `<skill-evaluation-required>` injection is disabled (see INV-005); the transition "(match) → [Evaluation Prompt]" no longer fires during normal operation.
+
 ## Invariants
 
 - **INV-001:** Every session receives the skills list at most once per agent, unless compaction or agent change occurs.
-- **INV-002:** The `<available-skills>` block is always injected with `noReply: true` and `synthetic: true`.
+- **INV-002:** The `<available-skills>` block is always injected with `noReply: true` and `synthetic: true`. The block now begins with a leading content line marking the content as synthetic system context (see `src/skills.ts` `injectSkillsList`).
 - **INV-003:** Agent changes always trigger a re-injection of the skills list with a switch notice.
 - **INV-004:** The plugin never throws during event handling; all errors are caught and logged.
+- **INV-005:** Per-message `<skill-evaluation-required>` injection is disabled. `formatMatchedSkillsInjection` and the original call site are preserved in `src/plugin.ts` so the injection can be restored without re-architecting; the semantic matching subsystem (`src/embeddings.ts`) remains in use only for the startup precomputation path.
 
 ## Dependencies
 

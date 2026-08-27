@@ -2,7 +2,9 @@
 
 ## Purpose
 
-The Semantic Matching subsystem automatically suggests relevant skills to the AI agent by computing semantic similarity between user messages and skill descriptions using transformer-based text embeddings.
+The Semantic Matching subsystem provides text-embedding-based similarity between skill descriptions and arbitrary input text, using transformer-based embeddings (quantized `all-MiniLM-L6-v2`). It supports two operations: precomputing skill description embeddings at plugin startup, and computing on-demand similarity against a user-provided text.
+
+The per-message chat handler no longer invokes this subsystem at runtime (the `<skill-evaluation-required>` injection is currently disabled — see `docs/features/PLUGIN_CORE.md` INV-005 and `CHANGELOG.md` `[Unreleased]`). The matching primitives, caching, and precomputation are retained so a redesigned prompt can be re-introduced without re-architecting.
 
 ## Boundaries
 
@@ -17,7 +19,7 @@ The Semantic Matching subsystem automatically suggests relevant skills to the AI
 ### Out of Scope
 
 - Skill discovery (handled by `src/skills.ts`)
-- Injecting matched skills into context (handled by `src/plugin.ts`)
+- Per-message prompt injection (handled by `src/plugin.ts`; currently disabled — see Purpose)
 - Training or fine-tuning models
 - Alternative matching strategies (regex, keyword)
 
@@ -31,14 +33,15 @@ The Semantic Matching subsystem automatically suggests relevant skills to the AI
 2. **Precomputation** (`precomputeSkillEmbeddings`)
    - Called at plugin startup with all discovered skills
    - Generates embeddings asynchronously (non-blocking)
-   - Warms the disk cache for subsequent matching
+   - Warms the disk cache so description embeddings are ready on disk even though the per-message matching path is currently dormant
 
-3. **User Message Matching** (`matchSkills`)
-   - Generates embedding for user message text
+3. **Skill Matching** (`matchSkills`)
+   - Generates embedding for the supplied query text
    - For each skill, loads/generates embedding for description
    - Computes cosine similarity between query and skill embeddings
    - Filters by threshold (default 0.35)
    - Returns top-K matches (default 5), sorted by score
+   - Export remains in place; the in-plugin call site is currently disabled
 
 4. **Cache Management** (`getEmbedding`)
    - Computes SHA256 of input text
@@ -59,15 +62,15 @@ The Semantic Matching subsystem automatically suggests relevant skills to the AI
 
 | Source | Data | Trigger |
 |--------|------|---------|
-| Plugin Core | User message text | Every non-initial message |
-| Plugin Core | `SkillSummary[]` | Plugin startup (precomputation) |
+| Plugin Core | `SkillSummary[]` | Plugin startup (precomputation only; per-message call site disabled) |
+| External caller | Query text + `SkillSummary[]` | Direct call to `matchSkills` (e.g., future re-enablement, tests) |
 | Hugging Face | Model weights | First embedding request |
 
 ### Outputs
 
 | Destination | Data | Trigger |
 |-------------|------|---------|
-| Plugin Core | `SkillSummary[]` (matched skills) | After similarity computation |
+| Caller of `matchSkills` | `SkillSummary[]` (matched skills) | After similarity computation |
 | Disk cache | Binary embedding files | After new embedding generation |
 
 ## Invariants
@@ -89,7 +92,7 @@ The Semantic Matching subsystem automatically suggests relevant skills to the AI
 
 ### Other Subsystems Depending On This
 
-- `src/plugin.ts` — calls `matchSkills` on user messages and `precomputeSkillEmbeddings` at startup
+- `src/plugin.ts` — calls `precomputeSkillEmbeddings` at plugin startup. The per-message `matchSkills` call is currently disabled; the function is imported and reserved for re-enablement (see `formatMatchedSkillsInjection` and the commented call site at the bottom of the `chat.message` handler).
 
 ## Constraints
 

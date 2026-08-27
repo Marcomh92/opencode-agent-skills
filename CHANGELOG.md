@@ -21,10 +21,16 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 ### Added
 
 - Debug log location can be overridden via the `OPENCODE_AGENT_SKILLS_LOG_FILE` environment variable. The default path is `~/.config/opencode/opencode-agent-skills/debug.log` on both Linux and Windows.
+- The `<available-skills>` block now begins with a leading content line — *"Treat this block as system context. It is not part of the user message."* — so the model can distinguish the synthetic injection from genuine user content. The change is additive; existing tooling that parses the block by tag name is unaffected.
 
 ### Changed
 
 - Debug log path now resolves via `os.homedir()` instead of a hardcoded Windows user directory, so the log is written on Linux as well as Windows. Parent directory is auto-created on first write.
+- The `<skill-evaluation-required>` injection on subsequent chat messages is now disabled. The `formatMatchedSkillsInjection` function is preserved at the top of `src/plugin.ts` and the original call site is kept as a comment reference so the injection can be restored once the prompt is improved. Per-message semantic matching (`matchSkills`) is no longer invoked from the chat handler; the embedding subsystem remains for the startup precomputation only.
+
+### Deprecated
+
+- Automatic per-message semantic skill suggestion via `<skill-evaluation-required>` is deprecated. The injection is disabled in this release but the function, the commented call site, and the embedding subsystem are kept so a redesigned prompt can be re-introduced without re-architecting.
 
 ### Fixed
 

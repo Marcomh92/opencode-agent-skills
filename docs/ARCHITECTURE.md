@@ -30,8 +30,7 @@
 
 3. **Subsequent messages** (`chat.message` event)
    - Detects agent changes and re-injects skills list with notice
-   - Computes semantic similarity between user message and skill descriptions
-   - Injects `<skill-evaluation-required>` prompt for matched skills
+   - The per-message `<skill-evaluation-required>` injection is currently disabled; `formatMatchedSkillsInjection` and the original call site are preserved in `src/plugin.ts` for re-enablement (see `docs/features/PLUGIN_CORE.md` INV-005)
 
 4. **Tool execution** (`tool.*` handlers)
    - Validates permissions before skill access

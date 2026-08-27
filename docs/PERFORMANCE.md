@@ -37,7 +37,7 @@
 
 ## Optimization Principles
 
-- Embed model is loaded lazily on first semantic match request
+- Embed model is loaded lazily on first embedding request (currently triggered by startup-time precomputation; the per-message matching call site is disabled — see `docs/features/PLUGIN_CORE.md` INV-005)
 - Embeddings are precomputed at plugin startup (non-blocking)
 - Skill discovery results are not cached; re-discovered on each tool call to pick up new skills
 - Permission resolution is cached per agent to avoid repeated file reads
