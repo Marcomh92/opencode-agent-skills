@@ -261,3 +261,5 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
     },
   };
 };
+
+export default SkillsPlugin;
