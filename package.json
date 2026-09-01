@@ -42,5 +42,11 @@
   },
   "engines": {
     "bun": ">=1.0.0"
+  },
+  "allowScripts": {
+    "msgpackr-extract@3.0.4": true,
+    "onnxruntime-node@1.20.1": true,
+    "protobufjs@7.6.1": true,
+    "sharp@0.34.5": true
   }
 }
