@@ -27,14 +27,19 @@ import * as path from "node:path";
 
 const PLUGIN_SOURCE_PATH = path.join(import.meta.dir, "plugin.ts");
 const EMBEDDINGS_SOURCE_PATH = path.join(import.meta.dir, "embeddings.ts");
+const STRIP_PATTERNS_SOURCE_PATH = path.join(import.meta.dir, "strip-patterns.ts");
 
 type MatchedSkill = { skill: { name: string; description: string; triggers?: string[] }; score: number };
 
 let sourceText = "";
-let formatRelevantSkillsInjection: ((matched: MatchedSkill[]) => string) | undefined;
+let formatRelevantSkillsInjection:
+  | ((matched: MatchedSkill[], includeSkillDescriptions?: boolean) => string)
+  | undefined;
 // Default initializer kept so early-touching tests see a valid number; the
 // real value is overwritten inside `beforeAll` after extraction succeeds.
 let extractedTierCutoff = 0.05;
+// Same idea for the default-include-descriptions lock test below.
+let extractedDefaultInclude = true;
 
 /**
  * Brace-balanced function-body extractor. Handles nested function bodies
@@ -149,6 +154,7 @@ function extractFunctionBody(src: string, name: string): string | undefined {
 beforeAll(async () => {
   sourceText = await fs.readFile(PLUGIN_SOURCE_PATH, "utf-8");
   const embeddingsSource = await fs.readFile(EMBEDDINGS_SOURCE_PATH, "utf-8");
+  const stripPatternsSource = await fs.readFile(STRIP_PATTERNS_SOURCE_PATH, "utf-8");
 
   const body = extractFunctionBody(sourceText, "formatRelevantSkillsInjection");
   if (body !== undefined) {
@@ -172,15 +178,42 @@ beforeAll(async () => {
     if (Number.isNaN(tierCutoffValue)) {
       throw new Error(`TIER_CUTOFF value is not a number: ${tierCutoffMatch[1]}`);
     }
-    // Wrap the body as a plain JS function. The source signature references
-    // the SkillSummary type which the Function constructor would reject, so we
-    // accept a structurally-equivalent local shape.
-    formatRelevantSkillsInjection = new Function(
-      "matchedSkills",
-      `const TIER_CUTOFF = ${tierCutoffValue};\n${body}`,
-    ) as (matched: MatchedSkill[]) => string;
     // Stash the cutoff for tests that lock the boundary in.
     extractedTierCutoff = tierCutoffValue;
+
+    // Same shape, for `DEFAULT_INCLUDE_SKILL_DESCRIPTIONS` in
+    // `src/strip-patterns.ts`. The production function's parameter default
+    // (`includeSkillDescriptions = DEFAULT_INCLUDE_SKILL_DESCRIPTIONS`) is
+    // lost when we extract only the body, so we explicitly wire a default
+    // on the Function-constructor parameter list using the same value
+    // extracted from source — keeping 1-arg calls (`fn([...])`) behaving
+    // like the production default.
+    const defaultIncludeMatch = stripPatternsSource.match(
+      /export\b\s*(?:\/\/[^\n]*\n\s*|\/\*[\s\S]*?\*\/\s*)*const\s+DEFAULT_INCLUDE_SKILL_DESCRIPTIONS\s*=\s*(\w+)/,
+    );
+    if (!defaultIncludeMatch) {
+      throw new Error(
+        "Could not find DEFAULT_INCLUDE_SKILL_DESCRIPTIONS constant in src/strip-patterns.ts source",
+      );
+    }
+    const defaultIncludeValue = defaultIncludeMatch[1]!;
+    if (defaultIncludeValue !== "true" && defaultIncludeValue !== "false") {
+      throw new Error(
+        `DEFAULT_INCLUDE_SKILL_DESCRIPTIONS value is not a boolean: ${defaultIncludeValue}`,
+      );
+    }
+    extractedDefaultInclude = defaultIncludeValue === "true";
+
+    // Wrap the body as a plain JS function. The source signature references
+    // the SkillSummary type which the Function constructor would reject, so
+    // we accept a structurally-equivalent local shape. The second parameter
+    // defaults to the same boolean the source uses so legacy 1-arg calls
+    // (no override) keep their "show descriptions" behavior.
+    formatRelevantSkillsInjection = new Function(
+      "matchedSkills",
+      `includeSkillDescriptions = ${defaultIncludeValue}`,
+      `const DEFAULT_INCLUDE_SKILL_DESCRIPTIONS = ${defaultIncludeValue};\nconst TIER_CUTOFF = ${tierCutoffValue};\n${body}`,
+    ) as (matched: MatchedSkill[], includeSkillDescriptions?: boolean) => string;
   }
 });
 
@@ -278,6 +311,72 @@ describe("formatRelevantSkillsInjection (current src/plugin.ts)", () => {
     // Regression guard: if someone bumps TIER_CUTOFF back to >= MARGIN, the
     // 'possible' branch becomes dead code (every match is within the cutoff).
     expect(extractedTierCutoff).toBe(0.05);
+  });
+
+  test("DEFAULT_INCLUDE_SKILL_DESCRIPTIONS is locked to true (default behavior is to include descriptions)", () => {
+    // Regression guard: this constant backs the production function's
+    // parameter default for `includeSkillDescriptions`. If someone flips
+    // it to false, the plugin would silently stop rendering descriptions
+    // for every existing user who hasn't opted into either value. Lock it.
+    expect(extractedDefaultInclude).toBe(true);
+  });
+
+  test("when includeSkillDescriptions = false, entries render as '- name (relevance: tier)' with no description", () => {
+    expect(formatRelevantSkillsInjection).toBeDefined();
+    const fn = formatRelevantSkillsInjection!;
+
+    const result = fn(
+      [
+        { skill: { name: "git-helper", description: "Git workflow assistance" }, score: 0.75 },
+        { skill: { name: "pdf", description: "PDF manipulation toolkit" }, score: 0.50 },
+      ],
+      false,
+    );
+
+    // Bulleted entries end exactly at the relevance tier — no `: description`
+    // suffix, no trailing colon.
+    expect(result).toContain("- git-helper (relevance: high)");
+    expect(result).toContain("- pdf (relevance: possible)");
+
+    // And — crucially — the descriptions themselves must NOT appear anywhere.
+    expect(result).not.toContain("Git workflow assistance");
+    expect(result).not.toContain("PDF manipulation toolkit");
+    expect(result).not.toContain("(relevance: high):");
+    expect(result).not.toContain("(relevance: possible):");
+
+    // Envelope + shared boilerplate is unaffected.
+    expect(result.startsWith("<relevant-skills>\n")).toBe(true);
+    expect(result.endsWith("</relevant-skills>")).toBe(true);
+    expect(result).toContain(
+      "If one of these directly applies to the current task, load it with use_skill(\"name\") before proceeding.",
+    );
+  });
+
+  test("when includeSkillDescriptions = true (explicit), entries render with descriptions (existing behavior)", () => {
+    expect(formatRelevantSkillsInjection).toBeDefined();
+    const fn = formatRelevantSkillsInjection!;
+
+    const result = fn(
+      [
+        { skill: { name: "git-helper", description: "Git workflow assistance" }, score: 0.75 },
+      ],
+      true,
+    );
+
+    expect(result).toContain("- git-helper (relevance: high): Git workflow assistance");
+  });
+
+  test("omitting the 2nd arg defaults to descriptions-shown (1-arg call stays backwards-compatible)", () => {
+    expect(formatRelevantSkillsInjection).toBeDefined();
+    const fn = formatRelevantSkillsInjection!;
+
+    // 1-arg call — must default to true, matching the production signature
+    // `includeSkillDescriptions = DEFAULT_INCLUDE_SKILL_DESCRIPTIONS`.
+    const result = fn([
+      { skill: { name: "git-helper", description: "Git workflow assistance" }, score: 0.75 },
+    ]);
+
+    expect(result).toContain("- git-helper (relevance: high): Git workflow assistance");
   });
 
   test("block does NOT carry the misleading verbs from the old prompt", () => {

@@ -40,7 +40,9 @@ import {
 import {
   containsSystemBlock,
   loadStripPatterns,
+  loadRelevantSkillConfig,
   stripText,
+  DEFAULT_INCLUDE_SKILL_DESCRIPTIONS,
 } from "./strip-patterns";
 
 const setupCompleteSessions = new Set<string>();
@@ -82,9 +84,14 @@ function getLoadedSkills(sessionID: string): Set<string> {
  * tighter than `MARGIN`, otherwise every returned match is within the cutoff
  * and the "possible" branch never fires). One cutoff keeps the prompt
  * binary (no "maybe"), which models parse cleanly.
+ *
+ * `includeSkillDescriptions` controls whether each bullet lists the skill's
+ * description (below) or only the title + relevance tier (tighter block,
+ * useful when the model already has descriptions from `<available-skills>`).
  */
 function formatRelevantSkillsInjection(
   matchedSkills: Array<{ skill: SkillSummary; score: number }>,
+  includeSkillDescriptions = DEFAULT_INCLUDE_SKILL_DESCRIPTIONS,
 ): string {
   const topScore = matchedSkills[0]?.score ?? 0;
   const tierCutoff = topScore - TIER_CUTOFF;
@@ -92,7 +99,8 @@ function formatRelevantSkillsInjection(
   const skillLines = matchedSkills
     .map(({ skill, score }) => {
       const tier = score >= tierCutoff ? "high" : "possible";
-      return `- ${skill.name} (relevance: ${tier}): ${skill.description}`;
+      const description = includeSkillDescriptions ? `: ${skill.description}` : "";
+      return `- ${skill.name} (relevance: ${tier})${description}`;
     })
     .join("\n");
 
@@ -122,6 +130,13 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
   // startup so the hot path doesn't pay file I/O on every chat.message.
   const stripPatterns = await loadStripPatterns(projectDir);
   await log(`[SKILLS PLUGIN] Strip patterns loaded: ${JSON.stringify(stripPatterns)}`);
+
+  // Load whether the <relevant-skills> block includes each skill's description.
+  // Read once at startup (mirrors stripPatterns).
+  const relevantSkillConfig = await loadRelevantSkillConfig(projectDir);
+  await log(
+    `[SKILLS PLUGIN] Relevant skill config loaded: ${JSON.stringify(relevantSkillConfig)}`,
+  );
 
   // Cache for resolved agent permissions
   const permissionsCache = new Map<string, AgentPermissions>();
@@ -333,7 +348,10 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
           `[SKILLS PLUGIN] Injecting ${newSkills.length} relevant skill(s) for session ${sessionID}: ${newSkills.map((m) => `${m.skill.name}@${m.score.toFixed(3)}`).join(", ")}`,
         );
 
-        const injectionText = formatRelevantSkillsInjection(newSkills);
+        const injectionText = formatRelevantSkillsInjection(
+          newSkills,
+          relevantSkillConfig.includeSkillDescriptions,
+        );
         const context: SessionContext = {
           model: output.message.model,
           agent: agentName,

@@ -5,8 +5,10 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
   DEFAULT_STRIP_PATTERNS,
+  DEFAULT_INCLUDE_SKILL_DESCRIPTIONS,
   compileStripPattern,
   containsSystemBlock,
+  loadRelevantSkillConfig,
   loadStripPatterns,
   stripText,
 } from "./strip-patterns";
@@ -24,6 +26,16 @@ describe("DEFAULT_STRIP_PATTERNS", () => {
     // default prevents self-pollution.
     expect(DEFAULT_STRIP_PATTERNS).toContain("<relevant-skills>");
     expect(DEFAULT_STRIP_PATTERNS).toContain("<agent-switch-notice>");
+  });
+});
+
+describe("DEFAULT_INCLUDE_SKILL_DESCRIPTIONS", () => {
+  test("is true — the <relevant-skills> block defaults to including descriptions", () => {
+    // Regression guard: this constant backs the production function's
+    // parameter default for `includeSkillDescriptions`. Flipping it to
+    // false would silently change the output shape for every existing
+    // user. Lock the source.
+    expect(DEFAULT_INCLUDE_SKILL_DESCRIPTIONS).toBe(true);
   });
 });
 
@@ -439,5 +451,229 @@ describe("loadStripPatterns", () => {
 
     // And the module-level constant itself must never have grown.
     expect(DEFAULT_STRIP_PATTERNS).not.toContain("<mutated>");
+  });
+});
+
+describe("loadRelevantSkillConfig", () => {
+  let tempHome: string;
+  let projectDir: string;
+  let userOpencodeDir: string;
+  let originalHome: string | undefined;
+  let originalUserProfile: string | undefined;
+  let originalLogEnv: string | undefined;
+
+  beforeEach(async () => {
+    // Mirror the `loadStripPatterns` harness — fresh temp tree per test so
+    // they don't share state, and redirect HOME/USERPROFILE so `homedir()`
+    // resolves to our temp dir (production reads the user-level config from
+    // `~/.config/opencode/opencode.json`).
+    tempHome = await fs.mkdtemp(path.join(tmpdir(), "load-relevant-skill-test-"));
+    projectDir = path.join(tempHome, "project");
+    userOpencodeDir = path.join(tempHome, ".config", "opencode");
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.mkdir(userOpencodeDir, { recursive: true });
+
+    originalHome = process.env.HOME;
+    originalUserProfile = process.env.USERPROFILE;
+    process.env.HOME = tempHome;
+    process.env.USERPROFILE = tempHome;
+
+    // Keep the logger pointed at our temp dir so test output doesn't pollute
+    // the user's real log file.
+    originalLogEnv = process.env.OPENCODE_AGENT_SKILLS_LOG_FILE;
+    process.env.OPENCODE_AGENT_SKILLS_LOG_FILE = path.join(tempHome, "debug.log");
+  });
+
+  afterEach(async () => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
+    if (originalLogEnv === undefined) delete process.env.OPENCODE_AGENT_SKILLS_LOG_FILE;
+    else process.env.OPENCODE_AGENT_SKILLS_LOG_FILE = originalLogEnv;
+
+    if (tempHome && existsSync(tempHome)) {
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  test("returns the default { includeSkillDescriptions: true } when no config file is present", async () => {
+    const result = await loadRelevantSkillConfig(projectDir);
+    expect(result).toEqual({ includeSkillDescriptions: true });
+  });
+
+  test("reads includeSkillDescriptions = true from project-level opencode.json", async () => {
+    const projectConfig = path.join(projectDir, ".opencode", "opencode.json");
+    await fs.mkdir(path.dirname(projectConfig), { recursive: true });
+    await fs.writeFile(
+      projectConfig,
+      JSON.stringify({
+        "opencode-agent-skills": { includeSkillDescriptions: true },
+      }),
+      "utf-8",
+    );
+
+    const result = await loadRelevantSkillConfig(projectDir);
+    expect(result).toEqual({ includeSkillDescriptions: true });
+  });
+
+  test("reads includeSkillDescriptions = false from project-level opencode.json", async () => {
+    const projectConfig = path.join(projectDir, ".opencode", "opencode.json");
+    await fs.mkdir(path.dirname(projectConfig), { recursive: true });
+    await fs.writeFile(
+      projectConfig,
+      JSON.stringify({
+        "opencode-agent-skills": { includeSkillDescriptions: false },
+      }),
+      "utf-8",
+    );
+
+    const result = await loadRelevantSkillConfig(projectDir);
+    expect(result).toEqual({ includeSkillDescriptions: false });
+  });
+
+  test("reads includeSkillDescriptions from user-level opencode.json when project has no config", async () => {
+    const userConfig = path.join(userOpencodeDir, "opencode.json");
+    await fs.writeFile(
+      userConfig,
+      JSON.stringify({
+        "opencode-agent-skills": { includeSkillDescriptions: false },
+      }),
+      "utf-8",
+    );
+
+    const result = await loadRelevantSkillConfig(projectDir);
+    expect(result).toEqual({ includeSkillDescriptions: false });
+  });
+
+  test("project-level config takes precedence over user-level", async () => {
+    const projectConfig = path.join(projectDir, ".opencode", "opencode.json");
+    await fs.mkdir(path.dirname(projectConfig), { recursive: true });
+    await fs.writeFile(
+      projectConfig,
+      JSON.stringify({
+        "opencode-agent-skills": { includeSkillDescriptions: true },
+      }),
+      "utf-8",
+    );
+    const userConfig = path.join(userOpencodeDir, "opencode.json");
+    await fs.writeFile(
+      userConfig,
+      JSON.stringify({
+        "opencode-agent-skills": { includeSkillDescriptions: false },
+      }),
+      "utf-8",
+    );
+
+    // Project says true, user says false → project wins.
+    const result = await loadRelevantSkillConfig(projectDir);
+    expect(result).toEqual({ includeSkillDescriptions: true });
+  });
+
+  test("invalid value (string) falls back to default { includeSkillDescriptions: true }", async () => {
+    const projectConfig = path.join(projectDir, ".opencode", "opencode.json");
+    await fs.mkdir(path.dirname(projectConfig), { recursive: true });
+    await fs.writeFile(
+      projectConfig,
+      JSON.stringify({
+        "opencode-agent-skills": { includeSkillDescriptions: "yes" },
+      }),
+      "utf-8",
+    );
+
+    const result = await loadRelevantSkillConfig(projectDir);
+    expect(result).toEqual({ includeSkillDescriptions: true });
+  });
+
+  test("invalid value (number) falls back to default", async () => {
+    const projectConfig = path.join(projectDir, ".opencode", "opencode.json");
+    await fs.mkdir(path.dirname(projectConfig), { recursive: true });
+    await fs.writeFile(
+      projectConfig,
+      JSON.stringify({
+        "opencode-agent-skills": { includeSkillDescriptions: 1 },
+      }),
+      "utf-8",
+    );
+
+    const result = await loadRelevantSkillConfig(projectDir);
+    expect(result).toEqual({ includeSkillDescriptions: true });
+  });
+
+  test("ignores config when 'opencode-agent-skills' block has no includeSkillDescriptions key", async () => {
+    const projectConfig = path.join(projectDir, ".opencode", "opencode.json");
+    await fs.mkdir(path.dirname(projectConfig), { recursive: true });
+    await fs.writeFile(
+      projectConfig,
+      JSON.stringify({
+        // Project config exists but the key is missing → keep looking → no
+        // user config → default.
+        "opencode-agent-skills": { differentKey: false },
+        "some-other-plugin": { includeSkillDescriptions: false },
+      }),
+      "utf-8",
+    );
+
+    const result = await loadRelevantSkillConfig(projectDir);
+    expect(result).toEqual({ includeSkillDescriptions: true });
+  });
+
+  test("user-level config is read when project config exists but lacks the key", async () => {
+    // Project config present but missing the key → reader should fall through
+    // to the user-level file and pick up `false` from there.
+    const projectConfig = path.join(projectDir, ".opencode", "opencode.json");
+    await fs.mkdir(path.dirname(projectConfig), { recursive: true });
+    await fs.writeFile(
+      projectConfig,
+      JSON.stringify({
+        "opencode-agent-skills": { someOtherKey: "irrelevant" },
+      }),
+      "utf-8",
+    );
+    const userConfig = path.join(userOpencodeDir, "opencode.json");
+    await fs.writeFile(
+      userConfig,
+      JSON.stringify({
+        "opencode-agent-skills": { includeSkillDescriptions: false },
+      }),
+      "utf-8",
+    );
+
+    const result = await loadRelevantSkillConfig(projectDir);
+    expect(result).toEqual({ includeSkillDescriptions: false });
+  });
+
+  test("tolerates malformed JSON gracefully (returns default)", async () => {
+    const projectConfig = path.join(projectDir, ".opencode", "opencode.json");
+    await fs.mkdir(path.dirname(projectConfig), { recursive: true });
+    await fs.writeFile(projectConfig, "{ not valid json", "utf-8");
+
+    const result = await loadRelevantSkillConfig(projectDir);
+    expect(result).toEqual({ includeSkillDescriptions: true });
+  });
+
+  test("invalid value in project-level falls through to user-level valid value", async () => {
+    // Project has an invalid type → reader skips → falls through to user
+    // config which has a valid boolean.
+    const projectConfig = path.join(projectDir, ".opencode", "opencode.json");
+    await fs.mkdir(path.dirname(projectConfig), { recursive: true });
+    await fs.writeFile(
+      projectConfig,
+      JSON.stringify({
+        "opencode-agent-skills": { includeSkillDescriptions: "yes" },
+      }),
+      "utf-8",
+    );
+    const userConfig = path.join(userOpencodeDir, "opencode.json");
+    await fs.writeFile(
+      userConfig,
+      JSON.stringify({
+        "opencode-agent-skills": { includeSkillDescriptions: false },
+      }),
+      "utf-8",
+    );
+
+    const result = await loadRelevantSkillConfig(projectDir);
+    expect(result).toEqual({ includeSkillDescriptions: false });
   });
 });

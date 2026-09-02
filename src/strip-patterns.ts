@@ -102,63 +102,100 @@ export function containsSystemBlock(text: string, name: string): boolean {
 const MAX_STRIP_PATTERNS = 32;
 
 /**
- * Load strip-pattern overrides from `opencode.json`. Lookup order:
+ * Shared layered reader for keys under the top-level `opencode-agent-skills`
+ * namespace. Lookup order:
  * 1. `<projectDir>/.opencode/opencode.json`
  * 2. `~/.config/opencode/opencode.json`
  *
- * Reads the top-level `opencode-agent-skills.stripPatterns` key (a `string[]`).
- * Returns the first-found array; falls back to `DEFAULT_STRIP_PATTERNS` when
- * neither file contains the key or when validation fails. Always succeeds —
- * file I/O errors are logged and the default is returned.
- *
- * Mirrors `loadGlobalPermissions` (`src/permissions.ts:78`) — same layered
- * config pattern, same graceful-degradation contract.
+ * Returns the first valid value for `key` in a config file, or `undefined`
+ * when neither file defines a valid value. Callers supply their own default.
+ * Always logs its traversal; file I/O errors are logged and skipped.
  */
-export async function loadStripPatterns(projectDir: string): Promise<string[]> {
+async function readPluginConfigKey(
+  projectDir: string,
+  key: string,
+  schema: z.ZodType,
+): Promise<unknown | undefined> {
   const configPaths = [
     path.join(projectDir, ".opencode", "opencode.json"),
     path.join(homedir(), ".config", "opencode", "opencode.json"),
   ];
 
-  await log(`[STRIP-PATTERNS] loadStripPatterns starting. projectDir=${projectDir}`);
-
-  const StripPatternsSchema = z.array(z.string()).max(MAX_STRIP_PATTERNS);
-
   for (const configPath of configPaths) {
     try {
-      await log(`[STRIP-PATTERNS] Checking config file: ${configPath}`);
+      await log(`[CONFIG] Checking ${key} in config file: ${configPath}`);
       const content = await fs.readFile(configPath, "utf-8");
       const config = JSON.parse(content) as Record<string, unknown>;
 
       const pluginBlock = config["opencode-agent-skills"] as
         | Record<string, unknown>
         | undefined;
-      const raw = pluginBlock?.["stripPatterns"];
+      const raw = pluginBlock?.[key];
 
       if (raw === undefined) {
-        await log(`[STRIP-PATTERNS] No stripPatterns key in ${configPath}`);
+        await log(`[CONFIG] No ${key} key in ${configPath}`);
         continue;
       }
 
-      const parsed = StripPatternsSchema.safeParse(raw);
+      const parsed = schema.safeParse(raw);
       if (!parsed.success) {
-        await log(
-          `[STRIP-PATTERNS] Invalid stripPatterns in ${configPath}: ${parsed.error.message}`,
-        );
+        await log(`[CONFIG] Invalid ${key} in ${configPath}: ${parsed.error.message}`);
         continue;
       }
 
-      await log(
-        `[STRIP-PATTERNS] Loaded ${parsed.data.length} patterns from ${configPath}: ${JSON.stringify(parsed.data)}`,
-      );
+      await log(`[CONFIG] Loaded ${key} from ${configPath}: ${JSON.stringify(parsed.data)}`);
       return parsed.data;
     } catch (err) {
-      await log(`[STRIP-PATTERNS] Config file not found or invalid: ${configPath} - ${err}`);
+      await log(`[CONFIG] Config file not found or invalid: ${configPath} - ${err}`);
     }
   }
 
+  return undefined;
+}
+
+/**
+ * Load strip-pattern overrides from `opencode.json`. Reads the top-level
+ * `opencode-agent-skills.stripPatterns` key (a `string[]`). Falls back to
+ * `DEFAULT_STRIP_PATTERNS` when neither file contains the key or when
+ * validation fails. Always succeeds — file I/O errors are logged and the
+ * default is returned.
+ *
+ * Mirrors `loadGlobalPermissions` (`src/permissions.ts:78`) — same layered
+ * config pattern, same graceful-degradation contract.
+ */
+export async function loadStripPatterns(projectDir: string): Promise<string[]> {
+  const value = await readPluginConfigKey(
+    projectDir,
+    "stripPatterns",
+    z.array(z.string()).max(MAX_STRIP_PATTERNS),
+  );
+  if (value !== undefined) return value as string[];
   await log(
     `[STRIP-PATTERNS] No stripPatterns found, using default: ${JSON.stringify(DEFAULT_STRIP_PATTERNS)}`,
   );
   return [...DEFAULT_STRIP_PATTERNS];
+}
+
+/**
+ * Default for the `<relevant-skills>` rendering: include each skill's
+ * description, not just the title + relevance tier.
+ */
+export const DEFAULT_INCLUDE_SKILL_DESCRIPTIONS = true;
+
+/**
+ * Load whether the `<relevant-skills>` block should include each skill's full
+ * description or only the title + relevance tier. Reads the top-level
+ * `opencode-agent-skills.includeSkillDescriptions` key (a `boolean`). Falls
+ * back to `DEFAULT_INCLUDE_SKILL_DESCRIPTIONS` (true) when absent or invalid.
+ * Always succeeds.
+ */
+export async function loadRelevantSkillConfig(
+  projectDir: string,
+): Promise<{ includeSkillDescriptions: boolean }> {
+  const value = await readPluginConfigKey(projectDir, "includeSkillDescriptions", z.boolean());
+  if (value !== undefined) return { includeSkillDescriptions: value as boolean };
+  await log(
+    `[SKILLS PLUGIN] No includeSkillDescriptions found, using default: ${DEFAULT_INCLUDE_SKILL_DESCRIPTIONS}`,
+  );
+  return { includeSkillDescriptions: DEFAULT_INCLUDE_SKILL_DESCRIPTIONS };
 }
