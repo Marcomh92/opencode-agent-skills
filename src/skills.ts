@@ -346,11 +346,62 @@ export async function listSkillFiles(skillPath: string, maxDepth: number = 3): P
 }
 
 /**
- * Skill summary for preflight evaluation.
+ * Skill summary for preflight evaluation and per-message matching.
+ *
+ * `triggers` carries the comma-separated `metadata.triggers` frontmatter
+ * entries. They're embedded alongside `description` to sharpen semantic
+ * matching — skills that share a generic word (e.g. "skill-creator" matches
+ * any message containing "skill") get a distinguishing signal.
+ *
+ * `metadata` carries the full frontmatter `metadata` block. It's only used by
+ * permission filtering (`filterSkillSummaries`) — embedding/matching code
+ * ignores it. Optional so existing test fixtures that omit it keep working.
  */
 export interface SkillSummary {
   name: string;
   description: string;
+  triggers?: string[];
+  metadata?: Record<string, string>;
+}
+
+/**
+ * Parse a comma-separated `metadata.triggers` string into a trimmed,
+ * non-empty array. Returns `[]` when the field is absent or empty.
+ *
+ * Limitation: there is no escape syntax. A trigger containing a literal comma
+ * (`"create, with comma"`) is parsed as two triggers (`["create", "with comma"]`).
+ * Skill authors should use a different separator (e.g. semicolon) or rename
+ * if they need a comma in a trigger.
+ *
+ * ponytail: the Anthropic Agent Skills Spec only defines string `metadata`;
+ * we treat triggers as a comma-separated string under that key (ADR-001).
+ */
+function parseTriggers(
+  metadata: Record<string, string> | undefined,
+): string[] {
+  const raw = metadata?.["triggers"];
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s): s is string => s.length > 0);
+}
+
+/**
+ * Pure in-memory filter of pre-discovered `SkillSummary` objects against
+ * the agent's permissions. No disk I/O — safe to call per message when the
+ * underlying skill list is cached (see `getSkillSummaries` callers in
+ * `src/plugin.ts`). `metadata` is required for tag-pattern rules to evaluate
+ * correctly; summaries without metadata are filtered by name-only rules.
+ */
+export function filterSkillSummaries(
+  summaries: SkillSummary[],
+  permissions: AgentPermissions | undefined,
+): SkillSummary[] {
+  if (!permissions) return summaries;
+  return summaries.filter((s) =>
+    isSkillAllowed(s.name, permissions, s.metadata),
+  );
 }
 
 /**
@@ -393,6 +444,8 @@ export async function getSkillSummaries(
   const summaries = filtered.map((skill) => ({
     name: skill.name,
     description: skill.description,
+    triggers: parseTriggers(skill.metadata),
+    metadata: skill.metadata,
   }));
   await log(`[SKILLS DISCOVERY] getSkillSummaries returning ${summaries.length} skills`);
   return summaries;

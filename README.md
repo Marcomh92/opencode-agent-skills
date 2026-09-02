@@ -3,7 +3,7 @@
 A dynamic skills plugin for OpenCode that provides tools for loading and using reusable AI agent skills.
 
 > [!NOTE]
-> OpenCode now includes first-party support for agent skills, including native skill discovery and a built-in `skill` tool. For most users, this plugin is no longer necessary. It remains available in maintenance mode for users who depend on its extra behavior, such as synthetic context injection, compaction reinjection, Superpowers bootstrapping, and helper tools for reading skill files or running skill scripts. The automatic per-message semantic skill suggestion prompt is currently disabled; only the assistant tools and the startup-time skill list injection are active.
+> OpenCode now includes first-party support for agent skills, including native skill discovery and a built-in `skill` tool. For most users, this plugin is no longer necessary. It remains available in maintenance mode for users who depend on its extra behavior, such as synthetic context injection, compaction reinjection, Superpowers bootstrapping, per-message skill suggestions, and helper tools for reading skill files or running skill scripts.
 
 ## Features
 
@@ -142,7 +142,11 @@ On session start, the plugin automatically injects a list of all discovered skil
 
 ### Automatic Skill Matching
 
-> **Currently disabled.** The plugin no longer injects the per-message `<skill-evaluation-required>` prompt that previously nudged the agent to load relevant skills based on semantic similarity. The original prompt was misleading the model into announcing skill decisions to users, and similarity scoring surfaced too many false positives. The `formatMatchedSkillsInjection` function and the matching code path are preserved in `src/plugin.ts` so the prompt can be restored once it is improved; the embedding model still precomputes skill description embeddings at startup. See `CHANGELOG.md` and `docs/features/PLUGIN_CORE.md` INV-005.
+After the initial skills list injection, the plugin embeds each user message and matches it against skill descriptions (and any `metadata.triggers` declared in their `SKILL.md`) using `Xenova/all-MiniLM-L6-v2`. When a match is found, the plugin injects a `<relevant-skills>` block listing the candidates with a relevance tier (`high` / `possible`) and a single conditional "load with `use_skill` if it applies" hint — silent by default so the model doesn't narrate the matching to the user.
+
+The prompt is deliberately thin (single conditional + silence path) to avoid the earlier failure mode where the prior `<skill-evaluation-required>` block primed models into saying "no skill required" or similar narration in the visible reply. Matching is also dedup'd against skills the agent has already loaded in the same session, so the same skill is never re-suggested twice.
+
+For the contract, the strip-then-match-then-inject flow, and the `TIER_CUTOFF` / `MARGIN` thresholds that control which matches surface, see `docs/features/SEMANTIC_MATCHING.md` and `docs/features/PLUGIN_CORE.md` INV-005–INV-007.
 
 ### Superpowers Mode (optional)
 

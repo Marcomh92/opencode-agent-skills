@@ -30,7 +30,7 @@
 
 3. **Subsequent messages** (`chat.message` event)
    - Detects agent changes and re-injects skills list with notice
-   - The per-message `<skill-evaluation-required>` injection is currently disabled; `formatMatchedSkillsInjection` and the original call site are preserved in `src/plugin.ts` for re-enablement (see `docs/features/PLUGIN_CORE.md` INV-005)
+   - Runs per-message semantic matching: strip system blocks from user text → embed → cosine-similarity match → threshold + margin + topK filter → dedup against already-loaded skills → inject a `<relevant-skills>` block with relevance tiers (`high` / `possible`) for any remaining matches. Default ON, no env-var gate. See `docs/features/SEMANTIC_MATCHING.md` and `docs/features/PLUGIN_CORE.md` INV-005–INV-007 for the full contract.
 
 4. **Tool execution** (`tool.*` handlers)
    - Validates permissions before skill access
@@ -76,14 +76,15 @@ The plugin maintains three per-session maps:
 | Map | Key | Value | Purpose |
 |-----|-----|-------|---------|
 | `setupCompleteSessions` | `sessionID` | `boolean` | Tracks whether initial skills list was injected |
-| `loadedSkillsPerSession` | `sessionID` | `Set<string>` | Tracks which skills have been loaded (to avoid duplicate evaluation prompts) |
+| `loadedSkillsPerSession` | `sessionID` | `Set<string>` | Tracks which skills have been loaded (to avoid re-suggesting already-loaded skills) |
 | `currentAgentPerSession` | `sessionID` | `string` | Tracks current agent to detect agent switches |
 
-Plus one plugin-level cache:
+Plus two plugin-level caches:
 
 | Cache | Key | Value | Purpose |
 |-------|-----|-------|---------|
 | `permissionsCache` | `agentName` | `AgentPermissions` | Avoids repeated file reads for permission resolution |
+| `skillsCache` | `agentName` (or `"__global__"`) | `SkillSummary[]` | Per-agent permission-filtered skill list. Discovery runs once at startup (`baseSkills`); each agent's filtered view is resolved lazily and cached. Keeps the per-message hot path off disk I/O. |
 
 ## Key Decisions
 

@@ -1,5 +1,16 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { getEmbedding, cosineSimilarity, matchSkills, applyHfEndpoint } from "./embeddings";
+import * as fs from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+import {
+  applyHfEndpoint,
+  buildEmbeddingText,
+  cosineSimilarity,
+  getEmbedding,
+  matchSkills,
+  pruneLegacyEmbeddingCache,
+} from "./embeddings";
 import { env } from "@huggingface/transformers";
 import type { SkillSummary } from "./skills";
 
@@ -128,40 +139,40 @@ describe("embeddings", () => {
         const matches = await matchSkills("Help me create a new branch and commit my changes", sampleSkills);
 
         expect(matches.length).toBeGreaterThan(0);
-        expect(matches.some(m => m.name === "git-helper")).toBe(true);
-        expect(matches.every(m => m.description)).toBe(true);
+        expect(matches.some(m => m.skill.name === "git-helper")).toBe(true);
+        expect(matches.every(m => m.skill.description)).toBe(true);
       });
 
       test("matches PDF tasks", async () => {
         const matches = await matchSkills("Extract tables from this PDF document", sampleSkills);
 
         expect(matches.length).toBeGreaterThan(0);
-        expect(matches.some(m => m.name === "pdf")).toBe(true);
-        expect(matches.every(m => m.description)).toBe(true);
+        expect(matches.some(m => m.skill.name === "pdf")).toBe(true);
+        expect(matches.every(m => m.skill.description)).toBe(true);
       });
 
       test("matches document editing tasks", async () => {
         const matches = await matchSkills("Edit this Word document and track changes", sampleSkills);
 
         expect(matches.length).toBeGreaterThan(0);
-        expect(matches.some(m => m.name === "docx")).toBe(true);
-        expect(matches.every(m => m.description)).toBe(true);
+        expect(matches.some(m => m.skill.name === "docx")).toBe(true);
+        expect(matches.every(m => m.skill.description)).toBe(true);
       });
 
       test("matches brainstorming tasks", async () => {
         const matches = await matchSkills("Help me refine this rough idea into a design", sampleSkills);
 
         expect(matches.length).toBeGreaterThan(0);
-        expect(matches.some(m => m.name === "brainstorming")).toBe(true);
-        expect(matches.every(m => m.description)).toBe(true);
+        expect(matches.some(m => m.skill.name === "brainstorming")).toBe(true);
+        expect(matches.every(m => m.skill.description)).toBe(true);
       });
 
       test("matches frontend design tasks", async () => {
         const matches = await matchSkills("Create a production-grade user interface", sampleSkills);
 
         expect(matches.length).toBeGreaterThan(0);
-        expect(matches.some(m => m.name === "frontend-design")).toBe(true);
-        expect(matches.every(m => m.description)).toBe(true);
+        expect(matches.some(m => m.skill.name === "frontend-design")).toBe(true);
+        expect(matches.every(m => m.skill.description)).toBe(true);
       });
     });
 
@@ -170,8 +181,8 @@ describe("embeddings", () => {
         const matches = await matchSkills("Design a frontend interface and help me brainstorm ideas", sampleSkills);
 
         expect(matches.length).toBeGreaterThan(0);
-        expect(matches.some(m => m.name === "frontend-design" || m.name === "brainstorming")).toBe(true);
-        expect(matches.every(m => m.description)).toBe(true);
+        expect(matches.some(m => m.skill.name === "frontend-design" || m.skill.name === "brainstorming")).toBe(true);
+        expect(matches.every(m => m.skill.description)).toBe(true);
       });
 
       test("returns at most 5 skills (respects topK limit)", async () => {
@@ -182,7 +193,18 @@ describe("embeddings", () => {
 
         const matches = await matchSkills("testing", manySkills);
         expect(matches.length).toBeLessThanOrEqual(5);
-        expect(matches.every(m => m.name && m.description)).toBe(true);
+        expect(matches.every(m => m.skill.name && m.skill.description)).toBe(true);
+      });
+
+      test("returns at most topK=2 when requested via options object", async () => {
+        const manySkills: SkillSummary[] = Array.from({ length: 20 }, (_, i) => ({
+          name: `skill-${i}`,
+          description: "Test skill for matching testing purposes",
+        }));
+
+        const matches = await matchSkills("testing", manySkills, { topK: 2 });
+        expect(matches.length).toBeLessThanOrEqual(2);
+        expect(matches.every(m => m.skill.name && m.skill.description)).toBe(true);
       });
     });
 
@@ -208,22 +230,32 @@ describe("embeddings", () => {
         const matches = await matchSkills("Create git branch for feature work! @#$%^&*()", sampleSkills);
 
         expect(matches.length).toBeGreaterThan(0);
-        expect(matches.some(m => m.name === "git-helper")).toBe(true);
-        expect(matches.every(m => m.description)).toBe(true);
+        expect(matches.some(m => m.skill.name === "git-helper")).toBe(true);
+        expect(matches.every(m => m.skill.description)).toBe(true);
       });
 
-      test("returns SkillSummary array with name and description", async () => {
+      test("returns { skill, score } shape with required fields", async () => {
         const matches = await matchSkills("Help with git", sampleSkills);
 
         expect(Array.isArray(matches)).toBe(true);
         if (matches.length > 0) {
           matches.forEach(match => {
-            expect(match).toHaveProperty("name");
-            expect(match).toHaveProperty("description");
-            expect(typeof match.name).toBe("string");
-            expect(typeof match.description).toBe("string");
+            expect(match).toHaveProperty("skill");
+            expect(match).toHaveProperty("score");
+            expect(typeof match.score).toBe("number");
+            expect(match.skill).toHaveProperty("name");
+            expect(match.skill).toHaveProperty("description");
+            expect(typeof match.skill.name).toBe("string");
+            expect(typeof match.skill.description).toBe("string");
           });
         }
+      });
+
+      test("respects a custom threshold via options object", async () => {
+        // Very high threshold should suppress most matches
+        const high = await matchSkills("Help with git", sampleSkills, { threshold: 0.99 });
+        const low = await matchSkills("Help with git", sampleSkills, { threshold: 0.0 });
+        expect(high.length).toBeLessThanOrEqual(low.length);
       });
     });
 
@@ -239,10 +271,111 @@ describe("embeddings", () => {
 
         if (matches.length > 0) {
           matches.forEach(match => {
-            expect(typeof match.name).toBe("string");
+            expect(typeof match.skill.name).toBe("string");
           });
         }
       });
+    });
+
+    describe("margin filter", () => {
+      test("every returned match has score within `margin` of the top", async () => {
+        // threshold=0 lets every non-negative cosine pass, so the only
+        // surviving filter is the margin cutoff against the top score.
+        const margin = 0.05;
+        const matches = await matchSkills(
+          "Help me create a git commit",
+          sampleSkills,
+          { threshold: 0, margin, topK: 10 },
+        );
+
+        if (matches.length >= 1) {
+          const topScore = matches[0]!.score;
+          for (const m of matches) {
+            // Tiny floating-point epsilon; the contract is ">= topScore - margin"
+            expect(m.score).toBeGreaterThanOrEqual(topScore - margin - 1e-9);
+          }
+        }
+      });
+
+      test("a tight margin yields a smaller result set than a generous margin", async () => {
+        const tight = await matchSkills(
+          "Help me commit changes to a git branch",
+          sampleSkills,
+          { threshold: 0, margin: 0.001, topK: 10 },
+        );
+        const generous = await matchSkills(
+          "Help me commit changes to a git branch",
+          sampleSkills,
+          { threshold: 0, margin: 0.9, topK: 10 },
+        );
+
+        // The generous case may include everything above the threshold;
+        // the tight case keeps only matches within 0.001 of the top.
+        // Same query, same skills — the contract guarantees tight <= generous.
+        expect(tight.length).toBeLessThanOrEqual(generous.length);
+      });
+
+      test("margin cuts off BEFORE the topK cap (matches in returned set are within margin of top)", async () => {
+        const matches = await matchSkills(
+          "commit git changes",
+          sampleSkills,
+          { threshold: 0, margin: 0.10, topK: 5 },
+        );
+
+        expect(matches.length).toBeLessThanOrEqual(5);
+        if (matches.length >= 2) {
+          const topScore = matches[0]!.score;
+          for (const m of matches) {
+            expect(m.score).toBeGreaterThanOrEqual(topScore - 0.10 - 1e-9);
+          }
+        }
+      });
+    });
+  });
+
+  describe("buildEmbeddingText", () => {
+    test("uses name and description only when no triggers present", () => {
+      const text = buildEmbeddingText({
+        name: "git-helper",
+        description: "Git workflow",
+      });
+      expect(text).toBe("git-helper: Git workflow");
+    });
+
+    test("treats triggers as the empty array when property is missing", () => {
+      const text = buildEmbeddingText({
+        name: "pdf",
+        description: "PDF tooling",
+      });
+      // No triggers key — should be treated as undefined/[] → no Triggers: suffix
+      expect(text).not.toContain("Triggers:");
+    });
+
+    test("treats an explicit triggers=[] as no triggers", () => {
+      const text = buildEmbeddingText({
+        name: "pdf",
+        description: "PDF tooling",
+        triggers: [],
+      });
+      expect(text).not.toContain("Triggers:");
+    });
+
+    test("renders triggers joined by ', ' when present and non-empty", () => {
+      const text = buildEmbeddingText({
+        name: "skill-creator",
+        description: "Helps creating skills",
+        triggers: ["create", "skill", "design"],
+      });
+      expect(text).toBe("skill-creator: Helps creating skills. Triggers: create, skill, design");
+    });
+
+    test("single trigger renders alone in the Triggers suffix", () => {
+      const text = buildEmbeddingText({
+        name: "docx",
+        description: "Word documents",
+        triggers: ["word"],
+      });
+      expect(text).toBe("docx: Word documents. Triggers: word");
     });
   });
 
@@ -293,5 +426,99 @@ describe("embeddings", () => {
       applyHfEndpoint();
       expect(env.remoteHost).toBe(originalRemoteHost);
     });
+  });
+});
+
+describe("pruneLegacyEmbeddingCache", () => {
+  let tempHome: string;
+  let originalXdgCache: string | undefined;
+  let originalHome: string | undefined;
+  let originalUserProfile: string | undefined;
+
+  // Override cache base dir by setting XDG_CACHE_HOME to a fresh temp dir.
+  // The function uses `getCacheBaseDir()` which respects XDG_CACHE_HOME.
+  beforeEach(async () => {
+    tempHome = await fs.mkdtemp(path.join(tmpdir(), "prune-cache-test-"));
+    originalXdgCache = process.env.XDG_CACHE_HOME;
+    originalHome = process.env.HOME;
+    originalUserProfile = process.env.USERPROFILE;
+    process.env.XDG_CACHE_HOME = tempHome;
+    process.env.HOME = tempHome;
+    process.env.USERPROFILE = tempHome;
+  });
+
+  afterEach(async () => {
+    if (originalXdgCache === undefined) delete process.env.XDG_CACHE_HOME;
+    else process.env.XDG_CACHE_HOME = originalXdgCache;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
+    if (existsSync(tempHome)) {
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  test("returns 0 and does not throw on a fresh install (no embeddings dir)", async () => {
+    // First-run case: the cache directory doesn't exist yet. ENOENT must be
+    // handled silently without surfacing as an error.
+    expect(existsSync(path.join(tempHome, "opencode-agent-skills", "embeddings"))).toBe(false);
+    const removed = await pruneLegacyEmbeddingCache();
+    expect(removed).toBe(0);
+  });
+
+  test("preserves files in the current SCHEMA_VERSION directory (v2/)", async () => {
+    const v2Dir = path.join(tempHome, "opencode-agent-skills", "embeddings", "v2");
+    await fs.mkdir(v2Dir, { recursive: true });
+    const liveFile = path.join(v2Dir, "live-hash.bin");
+    await fs.writeFile(liveFile, "live-data");
+
+    const removed = await pruneLegacyEmbeddingCache();
+    expect(removed).toBe(0);
+    expect(existsSync(liveFile)).toBe(true);
+  });
+
+  test("removes legacy `.bin` files at the embeddings root", async () => {
+    const rootDir = path.join(tempHome, "opencode-agent-skills", "embeddings");
+    await fs.mkdir(rootDir, { recursive: true });
+    const legacyFile = path.join(rootDir, "legacy-hash.bin");
+    await fs.writeFile(legacyFile, "legacy-data");
+
+    const removed = await pruneLegacyEmbeddingCache();
+    expect(removed).toBe(1);
+    expect(existsSync(legacyFile)).toBe(false);
+  });
+
+  test("leaves non-`.bin` files at the embeddings root untouched", async () => {
+    const rootDir = path.join(tempHome, "opencode-agent-skills", "embeddings");
+    await fs.mkdir(rootDir, { recursive: true });
+    const readme = path.join(rootDir, "README.md");
+    await fs.writeFile(readme, "keep me");
+
+    const removed = await pruneLegacyEmbeddingCache();
+    expect(removed).toBe(0);
+    expect(existsSync(readme)).toBe(true);
+  });
+
+  test("removes legacy `.bin` files inside legacy versioned subtrees (v1/, etc.)", async () => {
+    // Simulate a future SCHEMA_VERSION bump: v1/ is no longer live.
+    const v1Dir = path.join(tempHome, "opencode-agent-skills", "embeddings", "v1");
+    await fs.mkdir(v1Dir, { recursive: true });
+    const legacyFile = path.join(v1Dir, "stale-hash.bin");
+    await fs.writeFile(legacyFile, "stale-data");
+
+    const removed = await pruneLegacyEmbeddingCache();
+    expect(removed).toBe(1);
+    expect(existsSync(legacyFile)).toBe(false);
+  });
+
+  test("is idempotent — second call removes nothing", async () => {
+    const rootDir = path.join(tempHome, "opencode-agent-skills", "embeddings");
+    await fs.mkdir(rootDir, { recursive: true });
+    const legacyFile = path.join(rootDir, "legacy.bin");
+    await fs.writeFile(legacyFile, "x");
+
+    expect(await pruneLegacyEmbeddingCache()).toBe(1);
+    expect(await pruneLegacyEmbeddingCache()).toBe(0);
   });
 });

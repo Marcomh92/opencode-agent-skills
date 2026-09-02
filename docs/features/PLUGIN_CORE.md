@@ -27,13 +27,15 @@ The Plugin Core is the main entry point and lifecycle manager for the opencode-a
 1. **Plugin Load** (`src/plugin.ts`, `SkillsPlugin` function)
    - Clears debug log
    - Loads global permissions from `opencode.json`
-   - Discovers all skills (async, non-blocking)
+   - Loads strip patterns from `opencode.json`
+   - Discovers all skills once and caches the global-filtered list as `baseSkills`
    - Precomputes embeddings (async, non-blocking)
+   - Prunes legacy un-versioned `.bin` cache files (async, non-blocking)
    - Returns event handlers and tool definitions
 
 2. **First Message** (`chat.message` handler)
-   - Checks if session was previously set up (resumes)
-   - Resolves permissions for current agent
+   - Checks if session was previously set up (resume heuristic — looks for any prior `<available-skills>` or `<agent-switch-notice>` injection in session messages)
+   - Resolves permissions for current agent (cached per agent via `getPermissionsForAgent`)
    - Injects `<available-skills>` list
    - Optionally injects superpowers bootstrap
    - Marks session as setup-complete
@@ -42,10 +44,17 @@ The Plugin Core is the main entry point and lifecycle manager for the opencode-a
    - Compares current agent with last known agent
    - If changed: injects `<agent-switch-notice>` and re-injects skills list
    - Clears loaded skills tracking for the session
+   - Note: `loadedSkillsPerSession` is cleared but `setupCompleteSessions` is NOT — the session was already set up, only the agent context changed.
 
 4. **Subsequent Messages** (`chat.message` handler)
-   - Extracts user text from message parts
-   - Per-message `<skill-evaluation-required>` injection is currently **disabled** (see Invariants and Constraints); the `chat.message` handler returns early without invoking semantic matching or building an injection block. `formatMatchedSkillsInjection` and the original call site are preserved in `src/plugin.ts` for re-enablement.
+   - Extracts user text from non-synthetic message parts
+   - Resolves the agent-filtered skill list via `getSkillsForAgent` (in-memory filter of the cached `baseSkills`, no disk I/O)
+   - Strips system-injected blocks from the user text via `stripText(userText, stripPatterns)`
+   - Skips matching if the stripped text is < 20 chars (likely a short acknowledgment)
+   - Runs `matchSkills(cleanText, skills)` — threshold + margin + topK filter
+   - Drops matches whose skills were already loaded in this session (dedup via `loadedSkillsPerSession`)
+   - Injects a `<relevant-skills>` block for the remaining matches via `injectSyntheticContent`
+   - Whole block is wrapped in try/catch; errors are logged but do not break the chat.message handler (DPP-006)
 
 5. **Compaction** (`session.compacted` event)
    - Re-injects superpowers bootstrap
@@ -53,7 +62,7 @@ The Plugin Core is the main entry point and lifecycle manager for the opencode-a
    - Clears loaded skills tracking
 
 6. **Deletion** (`session.deleted` event)
-   - Removes session from all tracking maps
+   - Removes session from all tracking maps (`setupCompleteSessions`, `loadedSkillsPerSession`, `currentAgentPerSession`)
 
 ## State Machine
 
@@ -64,10 +73,11 @@ The Plugin Core is the main entry point and lifecycle manager for the opencode-a
 [Session Created] --(first message)--> [Skills Injected]
     |                                        |
     |                                        v
-    |                              [User Messages] (no per-message injection)
-    |                                        |
+    |                              [User Message] --(strip + match)--> [Relevant Skills Injected?]
+    |                                        |                                |
+    |                                        |<------- (no match) <------------+
     |                                        v
-    |                              [Agent Changed] --> [Re-inject Skills]
+    |                              [Agent Changed] --> [Switch Notice + Re-inject Skills]
     |                                        |
     v                                        v
 [Session Compacted] <-------------------- [Skills Re-injected]
@@ -76,23 +86,26 @@ The Plugin Core is the main entry point and lifecycle manager for the opencode-a
 [Session Deleted] --> [Cleanup State]
 ```
 
-Per-message `<skill-evaluation-required>` injection is disabled (see INV-005); the transition "(match) → [Evaluation Prompt]" no longer fires during normal operation.
+Per-message `<relevant-skills>` injection runs on every non-first message when (a) the user text is long enough, (b) `matchSkills` returns at least one match, and (c) at least one of those matches wasn't already loaded in this session. The transition "(strip + match) → [Relevant Skills Injected]" fires zero, one, or multiple times per message.
 
 ## Invariants
 
 - **INV-001:** Every session receives the skills list at most once per agent, unless compaction or agent change occurs.
-- **INV-002:** The `<available-skills>` block is always injected with `noReply: true` and `synthetic: true`. The block now begins with a leading content line marking the content as synthetic system context (see `src/skills.ts` `injectSkillsList`).
+- **INV-002:** The `<available-skills>` and `<relevant-skills>` blocks are always injected with `noReply: true` and `synthetic: true`. Both begin with a leading content line marking the content as synthetic system context (see `src/skills.ts` `injectSkillsList` and `src/plugin.ts` `formatRelevantSkillsInjection`).
 - **INV-003:** Agent changes always trigger a re-injection of the skills list with a switch notice.
 - **INV-004:** The plugin never throws during event handling; all errors are caught and logged.
-- **INV-005:** Per-message `<skill-evaluation-required>` injection is disabled. `formatMatchedSkillsInjection` and the original call site are preserved in `src/plugin.ts` so the injection can be restored without re-architecting; the semantic matching subsystem (`src/embeddings.ts`) remains in use only for the startup precomputation path.
+- **INV-005:** Skill discovery (`getSkillSummaries`) runs at most once per agent over the plugin's lifetime. The per-message handler resolves its skill list via the cached `baseSkills` filtered in-memory by the agent's permissions (`getSkillsForAgent`). This keeps the per-message hot path off disk I/O.
+- **INV-006:** The per-message `<relevant-skills>` block uses `TIER_CUTOFF` (imported from `src/embeddings.ts`) to label matches as `high` or `possible`. Matches within `TIER_CUTOFF` of the top score are `high`; otherwise `possible`.
+- **INV-007:** `<relevant-skills>`, `<available-skills>`, `<available-subagents>`, and `<agent-switch-notice>` are in `DEFAULT_STRIP_PATTERNS` so pasted transcripts of plugin output cannot pollute the matcher query.
 
 ## Dependencies
 
 ### This Subsystem Depends On
 
-- `src/skills.ts` — for skill discovery and list injection
-- `src/permissions.ts` — for permission resolution
-- `src/embeddings.ts` — for semantic matching
+- `src/skills.ts` — for skill discovery, summary construction, and permission filtering
+- `src/permissions.ts` — for permission resolution and per-agent caching
+- `src/embeddings.ts` — for `precomputeSkillEmbeddings`, `matchSkills`, `pruneLegacyEmbeddingCache`, and `TIER_CUTOFF`
+- `src/strip-patterns.ts` — for `loadStripPatterns`, `stripText`, and `containsSystemBlock`
 - `src/superpowers.ts` — for optional superpowers injection
 - `src/utils.ts` — for session context and synthetic injection
 - `src/logger.ts` — for debug logging
@@ -104,6 +117,6 @@ Per-message `<skill-evaluation-required>` injection is disabled (see INV-005); t
 
 ## Constraints
 
-- **Performance:** Plugin initialization must complete within 1 second (discovery is async and non-blocking).
+- **Performance:** Plugin initialization must complete within 1 second (discovery, precompute, and prune are async and non-blocking). Per-message matching must complete well under the user's perceived LLM latency budget — the per-agent skill-list cache keeps the hot path off disk I/O.
 - **Reliability:** Must not crash OpenCode on any error; all exceptions caught and logged.
 - **Compatibility:** Must work with OpenCode v1.0.110 or later.

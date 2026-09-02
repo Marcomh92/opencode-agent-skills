@@ -1,9 +1,10 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, beforeAll, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { injectSkillsList } from "./skills";
+import { filterSkillSummaries, injectSkillsList, type SkillSummary } from "./skills";
+import type { AgentPermissions } from "./permissions";
 import type { OpencodeClient } from "./utils";
 
 /**
@@ -111,5 +112,203 @@ describe("injectSkillsList block format", () => {
 
     // Skill list still injected (regression guard for the bullet line).
     expect(text).toContain("- demo: A demo skill for testing the available-skills block.");
+  });
+});
+
+/**
+ * `parseTriggers` is a module-private helper in src/skills.ts — not exported
+ * by intent. Rather than modify production code to add an export, we extract
+ * its body from the source file at test time, run it through `Bun.Transpiler`
+ * to strip TypeScript-only syntax (the body uses a type predicate on
+ * `.filter`), then evaluate via the Function constructor. This is consistent
+ * with how `formatMatchedSkillsInjection` is tested in src/plugin.test.ts.
+ */
+const SKILLS_SOURCE_PATH = path.join(import.meta.dir, "skills.ts");
+
+let sourceText = "";
+let parseTriggersFn:
+  | ((metadata: Record<string, string> | undefined) => string[])
+  | undefined;
+
+beforeAll(async () => {
+  sourceText = await fs.readFile(SKILLS_SOURCE_PATH, "utf-8");
+
+  // Matches `function parseTriggers(` through the body's opening `{`, then
+  // lazily captures up to the next `}` on its own line. The parameter type
+  // `Record<string, string>` does NOT contain `)` so `[^)]*` is unambiguous.
+  //
+  // ponytail: this regex is brittle to body changes that introduce a `}` on
+  // its own line (e.g. an inline object literal, a `.reduce(...)` callback
+  // spanning multiple lines). The current parseTriggers body has no such
+  // pattern, so the lazy match is safe today. If you add nested braces or a
+  // multi-line callback, switch to the brace-balanced extractor used in
+  // `src/plugin.test.ts` (extract that one to a shared test helper first).
+  const bodyMatch = sourceText.match(
+    /function parseTriggers\s*\([^)]*\)[^{]*\{([\s\S]*?)\r?\n\}/,
+  );
+  const tsBody = bodyMatch?.[1];
+  if (tsBody !== undefined) {
+    // The body contains TypeScript-specific syntax (a type predicate
+    // `(s): s is string => ...` on the `.filter` callback). The `Function`
+    // constructor only accepts plain JavaScript, so transpile the body
+    // through Bun's TS-aware transpiler first. The transpiler strips the
+    // annotation while preserving runtime semantics (the resulting `.filter`
+    // callback still returns the same boolean for non-empty strings).
+    const jsBody = new Bun.Transpiler({ loader: "ts" }).transformSync(tsBody);
+    parseTriggersFn = new Function(
+      "metadata",
+      jsBody,
+    ) as (metadata: Record<string, string> | undefined) => string[];
+  }
+});
+
+describe("parseTriggers", () => {
+  test("source still defines the function", () => {
+    expect(sourceText).toMatch(/function parseTriggers\s*\(/);
+  });
+
+  test("returns [] for undefined metadata", () => {
+    expect(parseTriggersFn).toBeDefined();
+    expect(parseTriggersFn!(undefined)).toEqual([]);
+  });
+
+  test("returns [] when no `triggers` key is present", () => {
+    expect(parseTriggersFn).toBeDefined();
+    expect(parseTriggersFn!({})).toEqual([]);
+  });
+
+  test("returns [] for an empty triggers string", () => {
+    expect(parseTriggersFn).toBeDefined();
+    expect(parseTriggersFn!({ triggers: "" })).toEqual([]);
+  });
+
+  test("single trigger becomes a one-item array", () => {
+    expect(parseTriggersFn).toBeDefined();
+    expect(parseTriggersFn!({ triggers: "foo" })).toEqual(["foo"]);
+  });
+
+  test("comma-separated multi-trigger string splits, trims each", () => {
+    expect(parseTriggersFn).toBeDefined();
+    expect(parseTriggersFn!({ triggers: "a, b, c" })).toEqual(["a", "b", "c"]);
+  });
+
+  test("whitespace inside and around commas is trimmed", () => {
+    expect(parseTriggersFn).toBeDefined();
+    expect(parseTriggersFn!({ triggers: " a , b " })).toEqual(["a", "b"]);
+  });
+
+  test("empty entries between commas are filtered out", () => {
+    expect(parseTriggersFn).toBeDefined();
+    expect(parseTriggersFn!({ triggers: "a,,b" })).toEqual(["a", "b"]);
+  });
+
+  test("leading/trailing commas yield no spurious empty entries", () => {
+    expect(parseTriggersFn).toBeDefined();
+    expect(parseTriggersFn!({ triggers: ",a,b," })).toEqual(["a", "b"]);
+  });
+
+  test("ignores other metadata keys (only `triggers` is read)", () => {
+    expect(parseTriggersFn).toBeDefined();
+    // `name` / `other` / etc. should NOT contribute to the parsed list.
+    expect(
+      parseTriggersFn!({
+        name: "git-helper",
+        other: "ignored",
+        triggers: "git, branch",
+      }),
+    ).toEqual(["git", "branch"]);
+  });
+
+  test("other metadata fields pass through unchanged; triggers are parsed", () => {
+    expect(parseTriggersFn).toBeDefined();
+    // The function only reads `metadata.triggers`; passing through other
+    // fields must not affect the returned array.
+    const result = parseTriggersFn!({
+      author: "someone",
+      triggers: "one,two",
+      audience: "all",
+    });
+    expect(result).toEqual(["one", "two"]);
+  });
+});
+
+describe("filterSkillSummaries", () => {
+  const sample: SkillSummary[] = [
+    { name: "git-helper", description: "Git workflow", triggers: ["git", "commit"] },
+    { name: "pdf", description: "PDF manipulation", triggers: ["pdf"] },
+    { name: "docx", description: "Word documents" },
+    {
+      name: "experimental-skill",
+      description: "Experimental",
+      metadata: { maturity: "experimental" },
+    },
+  ];
+
+  test("returns the input unchanged when permissions is undefined", () => {
+    expect(filterSkillSummaries(sample, undefined)).toEqual(sample);
+    // Same reference — no copy when there's nothing to filter.
+    expect(filterSkillSummaries(sample, undefined)).toBe(sample);
+  });
+
+  test("empty permissions rule list allows everything (default-allow semantics)", () => {
+    const perms: AgentPermissions = { skill: [] };
+    expect(filterSkillSummaries(sample, perms)).toEqual(sample);
+  });
+
+  test("`*: deny` removes every skill", () => {
+    const perms: AgentPermissions = { skill: [{ pattern: "*", action: "deny" }] };
+    expect(filterSkillSummaries(sample, perms)).toEqual([]);
+  });
+
+  test("first-match-wins: `git-*` allow before `*` deny keeps only git-helper", () => {
+    // Order matters: more-specific patterns must precede `*` so they get a
+    // chance to match before the catch-all fires.
+    const perms: AgentPermissions = {
+      skill: [
+        { pattern: "git-*", action: "allow" },
+        { pattern: "*", action: "deny" },
+      ],
+    };
+    const filtered = filterSkillSummaries(sample, perms);
+    expect(filtered.map((s) => s.name)).toEqual(["git-helper"]);
+  });
+
+  test("tag-pattern rule via metadata.maturity correctly filters", () => {
+    // Tag pattern `tag:maturity:experimental` matches summaries whose
+    // `metadata.maturity` is "experimental" (per evaluateSkillPermission's
+    // closed-vocabulary tag kinds).
+    const perms: AgentPermissions = {
+      skill: [{ pattern: "tag:maturity:experimental", action: "deny" }],
+    };
+    const filtered = filterSkillSummaries(sample, perms);
+    expect(filtered.map((s) => s.name)).toEqual([
+      "git-helper",
+      "pdf",
+      "docx",
+    ]);
+  });
+
+test("tag rules apply default values for missing metadata fields", () => {
+    // `evaluateSkillPermission` defaults `metadata.maturity` to "stable"
+    // when the field is absent. A `tag:maturity:experimental: deny` rule
+    // therefore matches ONLY skills with explicit `metadata.maturity =
+    // "experimental"`. `pdf` and `docx` (no metadata) fall through to the
+    // catch-all `*: deny`. `git-helper` survives via the `git-*` allow.
+    const perms: AgentPermissions = {
+      skill: [
+        { pattern: "git-*", action: "allow" },
+        { pattern: "tag:maturity:experimental", action: "deny" },
+        { pattern: "*", action: "deny" },
+      ],
+    };
+    const filtered = filterSkillSummaries(sample, perms);
+    expect(filtered.map((s) => s.name)).toEqual(["git-helper"]);
+  });
+
+  test("returns a new array (input is not mutated)", () => {
+    const perms: AgentPermissions = { skill: [{ pattern: "*", action: "deny" }] };
+    const filtered = filterSkillSummaries(sample, perms);
+    expect(filtered).not.toBe(sample);
+    expect(sample).toHaveLength(4); // input length preserved
   });
 });

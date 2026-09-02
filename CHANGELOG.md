@@ -22,19 +22,27 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 
 - Debug log location can be overridden via the `OPENCODE_AGENT_SKILLS_LOG_FILE` environment variable. The default path is `~/.config/opencode/opencode-agent-skills/debug.log` on both Linux and Windows.
 - The `<available-skills>` block now begins with a leading content line — *"Treat this block as system context. It is not part of the user message."* — so the model can distinguish the synthetic injection from genuine user content. The change is additive; existing tooling that parses the block by tag name is unaffected.
+- Per-message semantic skill suggestion is **re-enabled**. The chat.message handler now runs the strip → embed → match → dedup → inject flow for every non-first message and emits a `<relevant-skills>` block (default ON, no env-var gate) when the matcher surfaces candidates. The block uses a single conditional "load with `use_skill` if it applies" hint and an explicit silence path — designed to avoid the earlier failure mode where the prior `<skill-evaluation-required>` prompt primed models into narrating skill decisions to users.
+- `<available-skills>`, `<available-subagents>`, `<relevant-skills>`, and `<agent-switch-notice>` are now stripped from user text before matching (defaults in `src/strip-patterns.ts`). Prevents pasted transcripts of plugin output from polluting the matcher query with trigger words like "skill" and "use_skill". The strip list is overridable per-project via the top-level `opencode-agent-skills.stripPatterns` key in `opencode.json`.
+- Skills can now declare `metadata.triggers` in their `SKILL.md` frontmatter (comma-separated string under the Anthropic-spec-compliant `metadata` namespace, per ADR-001). Triggers are embedded alongside the description to sharpen matching — skills that share a generic word (e.g. `skill-creator` matching any message containing "skill") get a distinguishing signal.
+- Embedding cache is namespaced by `SCHEMA_VERSION` (`<baseDir>/embeddings/v2/<hash>.bin`). A startup `pruneLegacyEmbeddingCache` pass removes any orphan `.bin` files left in `<baseDir>/embeddings/` by previous schema bumps.
+- `<agent-switch-notice>` is included in the resume heuristic's marker set (alongside `<available-skills>`), so sessions that ran an agent switch on their first message are correctly detected as already-set-up.
+- Exported `TIER_CUTOFF` from `src/embeddings.ts` so the relevance-tier cutoff (`high` vs `possible` in `<relevant-skills>`) cannot drift from the `MARGIN` filter.
 
 ### Changed
 
 - Debug log path now resolves via `os.homedir()` instead of a hardcoded Windows user directory, so the log is written on Linux as well as Windows. Parent directory is auto-created on first write.
-- The `<skill-evaluation-required>` injection on subsequent chat messages is now disabled. The `formatMatchedSkillsInjection` function is preserved at the top of `src/plugin.ts` and the original call site is kept as a comment reference so the injection can be restored once the prompt is improved. Per-message semantic matching (`matchSkills`) is no longer invoked from the chat handler; the embedding subsystem remains for the startup precomputation only.
+- Per-message skill matching now runs through a per-agent cached filtered list (`getSkillsForAgent` in `src/plugin.ts`), mirroring the per-agent permission cache. Skill discovery happens once at plugin startup; subsequent matches re-filter the cached `baseSkills` in-memory by the current agent's permissions — no per-message disk I/O on the hot path.
+- The per-message injection is now labelled `<relevant-skills>` (was `<skill-evaluation-required>`). The block carries a coarse relevance tier per matched skill (`high` / `possible`) computed against `TIER_CUTOFF` (default `0.05`, must be tighter than `MARGIN` so the "possible" branch can fire).
 
 ### Deprecated
 
-- Automatic per-message semantic skill suggestion via `<skill-evaluation-required>` is deprecated. The injection is disabled in this release but the function, the commented call site, and the embedding subsystem are kept so a redesigned prompt can be re-introduced without re-architecting.
+- The old `formatMatchedSkillsInjection` function and its prompt have been removed from `src/plugin.ts`. They are superseded by `formatRelevantSkillsInjection`. The prior `<skill-evaluation-required>` tag and the misleading `EVALUATE → DECIDE → ACTIVATE` framing are gone.
 
 ### Fixed
 
 - Added `.gitattributes` line-ending policy: `*.ts`, `*.md`, and `*.json` files are pinned to LF; `*.cmd` and `*.ps1` stay CRLF. Prevents the CRLF frontmatter parse bug caused by mixed line endings across platforms.
+- Resume heuristic now updates `currentAgentPerSession` alongside `setupCompleteSessions` when a resumed session is detected. Previously the agent-change check below fired a spurious `<agent-switch-notice>` + skills-list re-injection on the first message after a process restart.
 
 ## [0.7.0]
 

@@ -18,19 +18,54 @@ import {
   injectSyntheticContent,
   type SessionContext,
 } from "./utils";
-import { injectSkillsList, getSkillSummaries } from "./skills";
+import {
+  injectSkillsList,
+  getSkillSummaries,
+  filterSkillSummaries,
+  type SkillSummary,
+} from "./skills";
 import { GetAvailableSkills, ReadSkillFile, RunSkillScript, UseSkill } from "./tools";
-import { matchSkills, precomputeSkillEmbeddings } from "./embeddings";
+import {
+  matchSkills,
+  precomputeSkillEmbeddings,
+  pruneLegacyEmbeddingCache,
+  TIER_CUTOFF,
+} from "./embeddings";
 import { log, clearLog } from "./logger";
 import {
   loadGlobalPermissions,
   resolveAgentPermissions,
   type AgentPermissions,
 } from "./permissions";
+import {
+  containsSystemBlock,
+  loadStripPatterns,
+  stripText,
+} from "./strip-patterns";
 
 const setupCompleteSessions = new Set<string>();
 const loadedSkillsPerSession = new Map<string, Set<string>>();
 const currentAgentPerSession = new Map<string, string>();
+
+/**
+ * Tags the plugin injects that mark a session as "already set up". The
+ * resume heuristic checks for any of these in prior session messages so
+ * it correctly handles sessions that ran an agent switch on their first
+ * message (which injects `<agent-switch-notice>` but may not re-inject
+ * `<available-skills>` depending on the path). Both tags are synthetic,
+ * so neither appears in real user text.
+ */
+const RESUME_MARKERS = ["available-skills", "agent-switch-notice"];
+
+/**
+ * Minimum user-text length (chars) required to run the per-message matcher.
+ * Below this, the text is treated as a short acknowledgment (e.g. "ok",
+ * "thanks", "go") that won't reliably embed-match any skill — and would
+ * just pay the strip + embed cost for noise. Tune upward if false
+ * positives surface on short messages; tune downward if real short
+ * intents (e.g. "fix the bug") fail to match.
+ */
+const MIN_MATCHING_TEXT_LENGTH = 20;
 
 function getLoadedSkills(sessionID: string): Set<string> {
   let set = loadedSkillsPerSession.get(sessionID);
@@ -41,26 +76,35 @@ function getLoadedSkills(sessionID: string): Set<string> {
   return set;
 }
 
-function formatMatchedSkillsInjection(
-  matchedSkills: Array<{ name: string; description: string }>
+/**
+ * ponytail: relevance tier is `topScore - score <= TIER_CUTOFF` → "high",
+ * else "possible". `TIER_CUTOFF` is imported from `./embeddings` (must be
+ * tighter than `MARGIN`, otherwise every returned match is within the cutoff
+ * and the "possible" branch never fires). One cutoff keeps the prompt
+ * binary (no "maybe"), which models parse cleanly.
+ */
+function formatRelevantSkillsInjection(
+  matchedSkills: Array<{ skill: SkillSummary; score: number }>,
 ): string {
+  const topScore = matchedSkills[0]?.score ?? 0;
+  const tierCutoff = topScore - TIER_CUTOFF;
+
   const skillLines = matchedSkills
-    .map((s) => `- ${s.name}: ${s.description}`)
+    .map(({ skill, score }) => {
+      const tier = score >= tierCutoff ? "high" : "possible";
+      return `- ${skill.name} (relevance: ${tier}): ${skill.description}`;
+    })
     .join("\n");
 
-  return `<skill-evaluation-required>
-SKILL EVALUATION PROCESS
+  return `<relevant-skills>
+Treat this block as system context. It is not part of the user message.
 
-The following skills may be relevant to your request:
+The following skills may be relevant to the current task:
 
 ${skillLines}
 
-Step 1 - EVALUATE: Determine if these skills would genuinely help
-Step 2 - DECIDE: Choose which skills (if any) are actually needed
-Step 3 - ACTIVATE: Call use_skill("name") for each chosen skill
-
-IMPORTANT: This evaluation is invisible to users—they cannot see this prompt. Do NOT announce your decision. Simply activate relevant skills or proceed directly with the request.
-</skill-evaluation-required>`;
+If one of these directly applies to the current task, load it with use_skill("name") before proceeding. Otherwise, ignore this block entirely.
+</relevant-skills>`;
 }
 
 export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) => {
@@ -74,8 +118,17 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
   const globalPermissions = await loadGlobalPermissions(projectDir);
   await log(`[SKILLS PLUGIN] Global permissions loaded: ${globalPermissions.skill.length} rules`);
 
+  // Load strip patterns for the per-message matching block. Read once at
+  // startup so the hot path doesn't pay file I/O on every chat.message.
+  const stripPatterns = await loadStripPatterns(projectDir);
+  await log(`[SKILLS PLUGIN] Strip patterns loaded: ${JSON.stringify(stripPatterns)}`);
+
   // Cache for resolved agent permissions
   const permissionsCache = new Map<string, AgentPermissions>();
+  // Cache for permission-filtered skill summaries, keyed by agent name (or
+  // "__global__" when no agent). Mirrors `permissionsCache` so both resolve
+  // at most once per agent for the lifetime of the plugin.
+  const skillsCache = new Map<string, SkillSummary[]>();
 
   async function getPermissionsForAgent(
     agentName?: string,
@@ -104,14 +157,39 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
     return resolved;
   }
 
-  const skills = await getSkillSummaries(projectDir, globalPermissions);
-  await log(`[SKILLS PLUGIN] Initial skill count: ${skills.length}`);
-  for (const s of skills) {
+  // Discover + filter skills ONCE at startup, then re-filter in-memory per
+  // agent. Discovery walks 4 directories + parses every SKILL.md, so we don't
+  // want to redo it on every chat.message.
+  const baseSkills = await getSkillSummaries(projectDir, globalPermissions);
+  await log(`[SKILLS PLUGIN] Initial skill count: ${baseSkills.length}`);
+  for (const s of baseSkills) {
     await log(`[SKILLS PLUGIN]  - ${s.name} (${s.description})`);
   }
-  precomputeSkillEmbeddings(skills).catch(async (err) => {
+  skillsCache.set("__global__", baseSkills);
+  precomputeSkillEmbeddings(baseSkills).catch(async (err) => {
     await log(`Failed to pre-compute skill embeddings: ${err}`);
   });
+  // Fire-and-forget: remove legacy un-versioned embedding cache files left
+  // over from the pre-`SCHEMA_VERSION="v2"` format. Idempotent.
+  pruneLegacyEmbeddingCache().catch(async (err) => {
+    await log(`[SKILLS PLUGIN] Legacy embedding cache prune failed: ${(err as Error).message}`);
+  });
+
+  async function getSkillsForAgent(
+    agentName?: string,
+  ): Promise<SkillSummary[]> {
+    const key = agentName ?? "__global__";
+    const cached = skillsCache.get(key);
+    if (cached) return cached;
+
+    const permissions = await getPermissionsForAgent(agentName);
+    const filtered = filterSkillSummaries(baseSkills, permissions);
+    await log(
+      `[SKILLS PLUGIN] getSkillsForAgent: agent=${agentName ?? "-"} filtered=${filtered.length}/${baseSkills.length}`,
+    );
+    skillsCache.set(key, filtered);
+    return filtered;
+  }
 
   return {
     "chat.message": async (input, output) => {
@@ -127,16 +205,28 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
           });
 
           if (existing.data) {
+            // Mark the session as already-set-up if any prior message carries
+            // a marker this plugin injects on setup or agent switch. Checking
+            // both `<available-skills>` (initial setup) and
+            // `<agent-switch-notice>` (agent switch) makes the heuristic robust
+            // to which injection fired last — without `<agent-switch-notice>`,
+            // a session that ran an agent switch on its only prior message
+            // would be wrongly detected as "never set up".
             const hasSkillsContent = existing.data.some(msg => {
               const parts = (msg as any).parts || (msg.info as any).parts;
               if (!parts) return false;
               return parts.some((part: any) =>
-                part.type === 'text' && part.text?.includes('<available-skills>')
+                part.type === 'text' && typeof part.text === "string"
+                  && RESUME_MARKERS.some((name) => containsSystemBlock(part.text, name))
               );
             });
 
             if (hasSkillsContent) {
               setupCompleteSessions.add(sessionID);
+              // Also seed the agent tracker — otherwise the agent-change
+              // check below sees `undefined !== currentAgent` and fires a
+              // spurious switch notice + skills list re-injection.
+              currentAgentPerSession.set(sessionID, agentName ?? "");
             }
           }
         } catch {
@@ -210,25 +300,48 @@ export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) =
         return;
       }
 
-      const skills = await getSkillSummaries(projectDir, permissions);
+      const skills = await getSkillsForAgent(agentName);
       if (skills.length === 0) {
         return;
       }
 
-      // ponytail: <skill-evaluation-required> injection is disabled. The prompt misleads
-      // models into announcing skill decisions to users, and semantic matching surfaces
-      // too many false positives. formatMatchedSkillsInjection is preserved above for
-      // re-use once the prompt is improved. The matching/injection block below is
-      // preserved as a reference. To re-enable: remove the `return` and uncomment the
-      // original block (see git history).
-      // Original block:
-      //   const matchedSkills = await matchSkills(userText, skills);
-      //   const loadedSkills = getLoadedSkills(sessionID);
-      //   const newSkills = matchedSkills.filter(s => !loadedSkills.has(s.name));
-      //   if (newSkills.length === 0) return;
-      //   const injectionText = formatMatchedSkillsInjection(newSkills);
-      //   const context: SessionContext = { model: output.message.model, agent: agentName };
-      //   await injectSyntheticContent(client, sessionID, injectionText, context);
+      // Per-message semantic matching. Strip system-injected blocks first
+      // (so they don't pollute the query embedding), run the matcher, filter
+      // out skills already loaded in this session, then inject a
+      // `<relevant-skills>` block for the remaining matches.
+      try {
+        const cleanText = stripText(userText, stripPatterns).trim();
+        if (cleanText.length < MIN_MATCHING_TEXT_LENGTH) {
+          await log(`[SKILLS PLUGIN] Skipping per-message matching: stripped text too short (${cleanText.length} chars < ${MIN_MATCHING_TEXT_LENGTH})`);
+          return;
+        }
+
+        const matched = await matchSkills(cleanText, skills);
+        if (matched.length === 0) {
+          await log(`[SKILLS PLUGIN] No matching skills for session ${sessionID}`);
+          return;
+        }
+
+        const loadedSkills = getLoadedSkills(sessionID);
+        const newSkills = matched.filter((m) => !loadedSkills.has(m.skill.name));
+        if (newSkills.length === 0) {
+          await log(`[SKILLS PLUGIN] All ${matched.length} matches already loaded for session ${sessionID}`);
+          return;
+        }
+
+        await log(
+          `[SKILLS PLUGIN] Injecting ${newSkills.length} relevant skill(s) for session ${sessionID}: ${newSkills.map((m) => `${m.skill.name}@${m.score.toFixed(3)}`).join(", ")}`,
+        );
+
+        const injectionText = formatRelevantSkillsInjection(newSkills);
+        const context: SessionContext = {
+          model: output.message.model,
+          agent: agentName,
+        };
+        await injectSyntheticContent(client, sessionID, injectionText, context);
+      } catch (err) {
+        await log(`[SKILLS PLUGIN] Per-message matching failed: ${(err as Error).message}`);
+      }
       return;
     },
 
