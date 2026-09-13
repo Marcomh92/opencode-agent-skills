@@ -2,9 +2,20 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { homedir } from "node:os";
-import { env, pipeline, type FeatureExtractionPipeline } from "@huggingface/transformers";
+import type { FeatureExtractionPipeline } from "@huggingface/transformers";
 import type { SkillSummary } from "./skills";
 import { log } from "./logger";
+
+/**
+ * `@huggingface/transformers` is imported lazily: it pulls in the native
+ * `onnxruntime-node` addon, and any throw while loading that addon during
+ * OpenCode's stage-1 plugin `import()` makes this entire plugin disappear
+ * silently — OpenCode reports stage-1 failures only to an internal event bus,
+ * never to the log file, and the factory never runs (so no tools register).
+ * Deferring the native import to first use keeps tool registration independent
+ * of embeddings availability.
+ */
+type TransformersModule = typeof import("@huggingface/transformers");
 
 const MODEL_NAME = "Xenova/all-MiniLM-L6-v2";
 const QUANTIZATION = "q8";
@@ -31,16 +42,45 @@ const SCHEMA_VERSION = "v2";
 
 let model: FeatureExtractionPipeline | null = null;
 let modelPromise: Promise<void> | null = null;
+let transformersPromise: Promise<TransformersModule | null> | null = null;
+let loadedTransformers: TransformersModule | null = null;
+
+/**
+ * Load the transformers module at most once. Resolves to `null` (after logging
+ * one warning) when the native backend cannot be loaded, turning embeddings
+ * into a no-op instead of taking the plugin down.
+ */
+function loadTransformers(): Promise<TransformersModule | null> {
+  if (!transformersPromise) {
+    transformersPromise = import("@huggingface/transformers")
+      .then((mod) => {
+        loadedTransformers = mod;
+        // Apply HF_ENDPOINT before the model is fetched so restricted-network
+        // users hit their mirror.
+        const hfEndpoint = process.env.HF_ENDPOINT?.trim();
+        if (hfEndpoint) mod.env.remoteHost = hfEndpoint;
+        return mod;
+      })
+      .catch(async (err) => {
+        const message = `[EMBEDDINGS] Semantic matching disabled — failed to load @huggingface/transformers: ${err instanceof Error ? err.message : String(err)}`;
+        console.error(message);
+        await log(message);
+        return null;
+      });
+  }
+  return transformersPromise;
+}
 
 /**
  * Apply HF_ENDPOINT environment variable to the transformers remote host config.
  * This allows users in restricted networks to use a mirror instead of huggingface.co.
+ * Safe to call before the module is loaded — the loader reads HF_ENDPOINT itself when it resolves.
  * @see https://github.com/joshuadavidthomas/opencode-agent-skills/issues/36
  */
 export function applyHfEndpoint(): void {
   const hfEndpoint = process.env.HF_ENDPOINT?.trim();
-  if (hfEndpoint) {
-    env.remoteHost = hfEndpoint;
+  if (hfEndpoint && loadedTransformers) {
+    loadedTransformers.env.remoteHost = hfEndpoint;
   }
 }
 
@@ -48,9 +88,15 @@ async function ensureModel(): Promise<void> {
   if (model) return;
   if (!modelPromise) {
     modelPromise = (async () => {
+      const mod = await loadTransformers();
+      if (!mod) return;
       applyHfEndpoint();
-      model = await pipeline("feature-extraction", MODEL_NAME, { dtype: QUANTIZATION });
-    })();
+      model = await mod.pipeline("feature-extraction", MODEL_NAME, { dtype: QUANTIZATION });
+    })().catch(async (err) => {
+      const message = `[EMBEDDINGS] Semantic matching disabled — model initialization failed: ${err instanceof Error ? err.message : String(err)}`;
+      console.error(message);
+      await log(message);
+    });
   }
   await modelPromise;
 }
@@ -155,7 +201,7 @@ export function buildEmbeddingText(skill: SkillSummary): string {
  */
 export async function getEmbedding(text: string): Promise<Float32Array> {
   await ensureModel();
-  if (!model) throw new Error("Model failed to load");
+  if (!model) throw new Error("Embeddings unavailable: transformers failed to load");
 
   const hash = crypto.createHash("sha256").update(text).digest("hex");
   const cachePath = getCachePath(hash);
@@ -245,6 +291,11 @@ export async function matchSkills(
   if (availableSkills.length === 0) {
     return [];
   }
+
+  // Native backend unavailable → no semantic boost. Skill discovery and all
+  // four tools keep working; only per-message suggestions are skipped.
+  await ensureModel();
+  if (!model) return [];
 
   const queryEmbedding = await getEmbedding(userMessage);
 

@@ -25,13 +25,13 @@ The Plugin Core is the main entry point and lifecycle manager for the opencode-a
 ## High-Level Flow
 
 1. **Plugin Load** (`src/plugin.ts`, `SkillsPlugin` function)
-   - Clears debug log
-   - Loads global permissions from `opencode.json`
-   - Loads strip patterns from `opencode.json`
+   - Initializes the per-session log file and prunes debug logs older than 10 days via `initSessionLog()` (see PAT-008)
+   - Loads global permissions from `opencode.json` (parsed as JSONC — see `docs/features/PERMISSIONS.md` INV-007)
+   - Loads strip patterns from `opencode.json` (same JSONC config reader, `src/strip-patterns.ts`)
    - Discovers all skills once and caches the global-filtered list as `baseSkills`
-   - Precomputes embeddings (async, non-blocking)
+   - Precomputes embeddings (async, non-blocking; triggers the lazy native backend load — see `docs/features/SEMANTIC_MATCHING.md`)
    - Prunes legacy un-versioned `.bin` cache files (async, non-blocking)
-   - Returns event handlers and tool definitions
+   - Returns event handlers and tool definitions. Tool registration does not depend on embedding availability.
 
 2. **First Message** (`chat.message` handler)
    - Checks if session was previously set up (resume heuristic — looks for any prior `<available-skills>` or `<agent-switch-notice>` injection in session messages)
@@ -97,6 +97,7 @@ Per-message `<relevant-skills>` injection runs on every non-first message when (
 - **INV-005:** Skill discovery (`getSkillSummaries`) runs at most once per agent over the plugin's lifetime. The per-message handler resolves its skill list via the cached `baseSkills` filtered in-memory by the agent's permissions (`getSkillsForAgent`). This keeps the per-message hot path off disk I/O.
 - **INV-006:** The per-message `<relevant-skills>` block uses `TIER_CUTOFF` (imported from `src/embeddings.ts`) to label matches as `high` or `possible`. Matches within `TIER_CUTOFF` of the top score are `high`; otherwise `possible`.
 - **INV-007:** `<relevant-skills>`, `<available-skills>`, `<available-subagents>`, and `<agent-switch-notice>` are in `DEFAULT_STRIP_PATTERNS` so pasted transcripts of plugin output cannot pollute the matcher query.
+- **INV-008:** Importing `src/plugin.ts` must never load native code and must never throw at module scope. The 4 tools always register, even when the native embeddings backend fails to load; skill discovery and permissions are unaffected (see `docs/features/SEMANTIC_MATCHING.md` INV-008).
 
 ## Dependencies
 

@@ -31,7 +31,7 @@ import {
   pruneLegacyEmbeddingCache,
   TIER_CUTOFF,
 } from "./embeddings";
-import { log, clearLog } from "./logger";
+import { log, initSessionLog } from "./logger";
 import {
   loadGlobalPermissions,
   resolveAgentPermissions,
@@ -116,7 +116,7 @@ If one of these directly applies to the current task, load it with use_skill("na
 }
 
 export const SkillsPlugin: Plugin = async ({ client, $, directory, worktree }) => {
-  await clearLog();
+  await initSessionLog();
   const projectDir = worktree ?? directory;
   await log(`[SKILLS PLUGIN] directory: ${directory}`);
   await log(`[SKILLS PLUGIN] worktree: ${worktree}`);

@@ -15,7 +15,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { homedir } from "node:os";
 import { z } from "zod";
-import { parseYamlFrontmatter } from "./utils";
+import { parseJsonc, parseYamlFrontmatter } from "./utils";
 import { log } from "./logger";
 
 /**
@@ -97,7 +97,7 @@ export async function loadGlobalPermissions(
     try {
       await log(`[PERMISSIONS] Checking config file: ${configPath}`);
       const content = await fs.readFile(configPath, "utf-8");
-      const config = JSON.parse(content) as Record<string, unknown>;
+      const config = parseJsonc(content) as Record<string, unknown>;
 
       await log(`[PERMISSIONS] Parsed config from ${configPath}`);
 

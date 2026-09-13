@@ -16,6 +16,7 @@ import * as path from "node:path";
 import { homedir } from "node:os";
 import { z } from "zod";
 import { log } from "./logger";
+import { parseJsonc } from "./utils";
 
 /**
  * Defaults — what every session strips when no config is present. Includes:
@@ -125,7 +126,7 @@ async function readPluginConfigKey(
     try {
       await log(`[CONFIG] Checking ${key} in config file: ${configPath}`);
       const content = await fs.readFile(configPath, "utf-8");
-      const config = JSON.parse(content) as Record<string, unknown>;
+      const config = parseJsonc(content) as Record<string, unknown>;
 
       const pluginBlock = config["opencode-agent-skills"] as
         | Record<string, unknown>

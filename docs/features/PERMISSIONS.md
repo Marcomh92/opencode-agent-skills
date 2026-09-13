@@ -9,6 +9,7 @@ The Permissions subsystem controls which skills each AI agent is allowed to acce
 ### In Scope
 
 - Global permission loading from `opencode.json`
+- Tolerant JSONC parsing of `opencode.json` (comments permitted; trailing commas are not)
 - Agent-specific permission loading from agent markdown files
 - Permission rule parsing (string and object formats)
 - Permission merging (global + agent-specific)
@@ -20,6 +21,7 @@ The Permissions subsystem controls which skills each AI agent is allowed to acce
 - OpenCode's native `skill` permission handling
 - UI for permission configuration
 - Permission persistence (managed by user via config files)
+- Trailing-comma tolerance in `opencode.json` (not yet supported)
 
 ## High-Level Flow
 
@@ -27,6 +29,7 @@ The Permissions subsystem controls which skills each AI agent is allowed to acce
    - Searches `opencode.json` in project directory (`./.opencode/opencode.json`)
    - Falls back to user-level config (`~/.config/opencode/opencode.json`)
    - Extracts permissions under custom key `opencode-agent-skills`
+   - Parses the file as JSONC via `parseJsonc`, so `//` and `/* */` comments are tolerated
    - Returns default `allow all` if no config found
 
 2. **Agent Permission Loading** (`loadAgentPermissions`)
@@ -148,12 +151,14 @@ Later overrides earlier for the same pattern.
 - **INV-004:** Rules iterate in **config order**; first match wins. There is no specificity sort — a wildcard listed before a specific pattern means the wildcard wins.
 - **INV-005:** Agent permissions override global permissions for the same pattern.
 - **INV-006 (Phase 2 WS2.3):** Tag patterns (`tag:capability:*` / `tag:audience:*` / `tag:maturity:*`) match against the skill's frontmatter `metadata`. Metadata-less skills default to `audience: "all"` + `maturity: "stable"` (`07-tag-skills/tag-schema.md:100` migration promise); `capability` has no default, so a `tag:capability:*` rule against a metadata-less skill falls through to the next rule. Unrecognised tag kinds fall through (lenient matcher per `07-tag-skills/skill-permissions.md:193`).
+- **INV-007:** `opencode.json` is parsed as JSONC (see PAT-009). Line (`//`) and block (`/* */`) comments are ignored, including comments inside the permission block; comment-like sequences inside JSON string values are preserved. A comment-free document parses identically to `JSON.parse`. Trailing commas are not supported.
+- **INV-008:** A malformed config (including one with an unterminated block comment) is caught and skipped; loading falls through to the next config source or the allow-all default. No comment-related parse failure silently changes permissions.
 
 ## Dependencies
 
 ### This Subsystem Depends On
 
-- `src/utils.ts` — for YAML frontmatter parsing
+- `src/utils.ts` — for YAML frontmatter parsing and JSONC parsing (`parseJsonc`)
 - `src/logger.ts` — for debug logging
 
 ### Other Subsystems Depending On This

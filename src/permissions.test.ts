@@ -1,9 +1,14 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import * as fs from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 import {
   matchPattern,
   mergePermissions,
   evaluateSkillPermission,
   isSkillAllowed,
+  loadGlobalPermissions,
 } from "./permissions";
 import type { PermissionRule, AgentPermissions } from "./permissions";
 
@@ -566,5 +571,120 @@ describe("isSkillAllowed", () => {
       skill: [{ pattern: "tag:capability:web", action: "deny" }],
     };
     expect(isSkillAllowed("any", permissions, {})).toBe(true);
+  });
+});
+
+describe("loadGlobalPermissions", () => {
+  let tempHome: string;
+  let projectDir: string;
+  let originalHome: string | undefined;
+  let originalUserProfile: string | undefined;
+  let originalLogEnv: string | undefined;
+
+  beforeEach(async () => {
+    // Fresh temp tree per test. `loadGlobalPermissions` reads the user-level
+    // config from `<homedir()>/.config/opencode/opencode.json`, so HOME and
+    // USERPROFILE are redirected like the strip-patterns suite does.
+    tempHome = await fs.mkdtemp(path.join(tmpdir(), "permissions-jsonc-test-"));
+    projectDir = path.join(tempHome, "project");
+    await fs.mkdir(projectDir, { recursive: true });
+
+    originalHome = process.env.HOME;
+    originalUserProfile = process.env.USERPROFILE;
+    process.env.HOME = tempHome;
+    process.env.USERPROFILE = tempHome;
+
+    // Keep log output out of the user's real log file where possible.
+    originalLogEnv = process.env.OPENCODE_AGENT_SKILLS_LOG_FILE;
+    process.env.OPENCODE_AGENT_SKILLS_LOG_FILE = path.join(tempHome, "debug.log");
+  });
+
+  afterEach(async () => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
+    if (originalLogEnv === undefined) delete process.env.OPENCODE_AGENT_SKILLS_LOG_FILE;
+    else process.env.OPENCODE_AGENT_SKILLS_LOG_FILE = originalLogEnv;
+
+    if (tempHome && existsSync(tempHome)) {
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  test("reads permissions from a project-level opencode.json with JSONC comments", async () => {
+    const projectConfig = path.join(projectDir, ".opencode", "opencode.json");
+    await fs.mkdir(path.dirname(projectConfig), { recursive: true });
+    const jsonc = `{
+      // Project-level skill permissions
+      "permission": {
+        "opencode-agent-skills": {
+          "git-*": "deny", // no git skills in this project
+          "pdf": "allow" /* explicit */
+        }
+      }
+    }`;
+    await fs.writeFile(projectConfig, jsonc, "utf-8");
+
+    // Pre-fix, the loader called JSON.parse on this file, which throws on
+    // JSONC — the catch would have silently fallen back to allow-all defaults.
+    expect(() => JSON.parse(jsonc)).toThrow();
+
+    const perms = await loadGlobalPermissions(projectDir);
+    expect(perms).toEqual({
+      skill: [
+        { pattern: "git-*", action: "deny" },
+        { pattern: "pdf", action: "allow" },
+      ],
+    });
+  });
+
+  test("reads shorthand permissions from a user-level opencode.json with comments", async () => {
+    const userConfig = path.join(tempHome, ".config", "opencode", "opencode.json");
+    await fs.mkdir(path.dirname(userConfig), { recursive: true });
+    await fs.writeFile(
+      userConfig,
+      `{
+        // Global default for every project
+        "permission": { "opencode-agent-skills": "deny" }
+      }`,
+      "utf-8",
+    );
+
+    const perms = await loadGlobalPermissions(projectDir);
+    expect(perms).toEqual({ skill: [{ pattern: "*", action: "deny" }] });
+  });
+
+  test("comment-like sequences inside string values do not corrupt the config", async () => {
+    const projectConfig = path.join(projectDir, ".opencode", "opencode.json");
+    await fs.mkdir(path.dirname(projectConfig), { recursive: true });
+    await fs.writeFile(
+      projectConfig,
+      `{
+        // A sibling value containing comment markers must survive byte-for-byte
+        "note": "see https://example.com/docs//permissions",
+        "permission": { "opencode-agent-skills": { "*": "allow" } }
+      }`,
+      "utf-8",
+    );
+
+    const perms = await loadGlobalPermissions(projectDir);
+    expect(perms).toEqual({ skill: [{ pattern: "*", action: "allow" }] });
+  });
+
+  test("falls back to allow-all defaults when a commented config is still malformed", async () => {
+    const projectConfig = path.join(projectDir, ".opencode", "opencode.json");
+    await fs.mkdir(path.dirname(projectConfig), { recursive: true });
+    await fs.writeFile(
+      projectConfig,
+      `{
+        // Missing closing braces on purpose
+        "permission": { "opencode-agent-skills": {
+      }`,
+      "utf-8",
+    );
+
+    const perms = await loadGlobalPermissions(projectDir);
+    expect(perms).toEqual({ skill: [] });
   });
 });

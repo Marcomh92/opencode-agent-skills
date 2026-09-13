@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { describe, expect, test, beforeAll, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -383,6 +383,14 @@ describe("embeddings", () => {
     let originalHfEndpoint: string | undefined;
     let originalRemoteHost: string;
 
+    // `applyHfEndpoint()` only mutates `env.remoteHost` once the lazily loaded
+    // native module has finished loading. When this describe runs in isolation
+    // (e.g. `--grep "applyHfEndpoint"`) no earlier test has loaded it yet, so
+    // warm the loader up first to make these sync assertions self-contained.
+    beforeAll(async () => {
+      await getEmbedding("warmup");
+    });
+
     beforeEach(() => {
       originalHfEndpoint = process.env.HF_ENDPOINT;
       originalRemoteHost = env.remoteHost;
@@ -520,5 +528,41 @@ describe("pruneLegacyEmbeddingCache", () => {
 
     expect(await pruneLegacyEmbeddingCache()).toBe(1);
     expect(await pruneLegacyEmbeddingCache()).toBe(0);
+  });
+});
+
+describe("embeddings — transformers import failure", () => {
+  test("matchSkills resolves to [], warns exactly once, and getEmbedding rejects (fresh process)", async () => {
+    // Regression guard for the lazy-transformers refactor: a failure loading
+    // the native @huggingface/transformers backend must degrade embeddings to a
+    // no-op instead of taking down the plugin.
+    //
+    // The fixture runs in its own `bun run` process where the throwing
+    // mock.module() is registered before the package is ever imported, so the
+    // production dynamic import() genuinely rejects. Doing this in-process is
+    // not possible (Bun eagerly evaluates the throwing factory at registration
+    // once the package is loaded, leaving no mock behind) and would leak into
+    // the real-model tests above. See the fixture header for details.
+    const fixture = path.join(import.meta.dir, "embeddings-import-failure.fixture.ts");
+    const proc = Bun.spawnSync({
+      cmd: [process.execPath, "run", fixture],
+      cwd: path.join(import.meta.dir, ".."),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const stdout = String(proc.stdout);
+    const stderr = String(proc.stderr);
+    if (proc.exitCode !== 0) {
+      throw new Error(
+        `embeddings fixture exited with ${proc.exitCode}\nstdout: ${stdout}\nstderr: ${stderr}`,
+      );
+    }
+
+    const summary = JSON.parse(stdout.trim().split("\n").pop() ?? "{}");
+    expect(summary.firstMatches).toBe(0);
+    expect(summary.secondMatches).toBe(0);
+    expect(summary.disabledWarnings).toBe(1);
+    expect(String(summary.embeddingError)).toContain("Embeddings unavailable");
   });
 });

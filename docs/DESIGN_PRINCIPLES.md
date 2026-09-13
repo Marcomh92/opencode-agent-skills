@@ -54,11 +54,11 @@ This document defines the non-negotiable rules that shape the opencode-agent-ski
 
 ## DPP-006: Graceful Degradation for Optional Features
 
-**Principle:** Optional features (embeddings, permissions, superpowers) must fail gracefully without breaking core functionality.
+**Principle:** Optional features (embeddings, permissions, superpowers) must fail gracefully without breaking core functionality. Native-backed dependencies must be loaded lazily at first use, never at module scope.
 
-**Rationale:** The plugin must work in diverse environments. Some users may not have GPU support for embeddings, may not configure permissions, or may not install superpowers.
+**Rationale:** The plugin must work in diverse environments. Some users may not have GPU support for embeddings, may not configure permissions, or may not install superpowers. A native dependency imported statically executes during OpenCode's stage-1 plugin `import()`; a transient native-addon load failure then removes the entire plugin silently — OpenCode reports stage-1 failures only to an internal event bus, never to the debug log — leaving the user with no tools. Deferring the import keeps tool registration independent of the optional feature.
 
-**Enforcement:** Verified by tests and code review. All optional feature initializations are wrapped in try/catch blocks with silent fallbacks.
+**Enforcement:** Verified by tests and code review. Importing `src/plugin.ts` must never load native code and must never throw at module scope. `@huggingface/transformers` is loaded via `loadTransformers()` in `src/embeddings.ts` (a memoized dynamic import that logs one fallback warning); optional feature initializations are wrapped in try/catch with fallbacks. See `docs/features/SEMANTIC_MATCHING.md` INV-008 and INV-009.
 
 **Exception:** None.
 

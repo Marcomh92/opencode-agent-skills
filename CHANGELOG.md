@@ -34,6 +34,7 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 - Debug log path now resolves via `os.homedir()` instead of a hardcoded Windows user directory, so the log is written on Linux as well as Windows. Parent directory is auto-created on first write.
 - Per-message skill matching now runs through a per-agent cached filtered list (`getSkillsForAgent` in `src/plugin.ts`), mirroring the per-agent permission cache. Skill discovery happens once at plugin startup; subsequent matches re-filter the cached `baseSkills` in-memory by the current agent's permissions — no per-message disk I/O on the hot path.
 - The per-message injection is now labelled `<relevant-skills>` (was `<skill-evaluation-required>`). The block carries a coarse relevance tier per matched skill (`high` / `possible`) computed against `TIER_CUTOFF` (default `0.05`, must be tighter than `MARGIN` so the "possible" branch can fire).
+- The native `@huggingface/transformers` backend is now imported lazily (a memoized dynamic `import()` on first use) instead of at module scope. A transient failure loading the native `onnxruntime-node` stack no longer removes the plugin during OpenCode's stage-1 `import()`: the plugin loads, all four tools register, and semantic matching degrades to a no-op for the process with a single logged warning. Previously such a failure could make the plugin vanish silently — no tools and no debug log. `HF_ENDPOINT` is still applied, now when the module resolves.
 
 ### Deprecated
 
@@ -43,6 +44,7 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 
 - Added `.gitattributes` line-ending policy: `*.ts`, `*.md`, and `*.json` files are pinned to LF; `*.cmd` and `*.ps1` stay CRLF. Prevents the CRLF frontmatter parse bug caused by mixed line endings across platforms.
 - Resume heuristic now updates `currentAgentPerSession` alongside `setupCompleteSessions` when a resumed session is detected. Previously the agent-change check below fired a spurious `<agent-switch-notice>` + skills-list re-injection on the first message after a process restart.
+- `opencode.json` is now parsed as JSONC via the new exported `parseJsonc` (`src/utils.ts`), so `//` line and `/* */` block comments no longer cause the plugin's config block and global skill permissions to silently fall back to defaults. Comment markers inside JSON string values are preserved; an unterminated block comment throws instead of parsing silently. Trailing commas remain unsupported.
 
 ## [0.7.0]
 

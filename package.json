@@ -27,12 +27,12 @@
   "dependencies": {
     "@huggingface/transformers": "3.8.1",
     "@opencode-ai/plugin": "1.18.9",
-    "onnxruntime-node": "1.20.1",
+    "onnxruntime-node": "1.21.0",
     "yaml": "^2.8.2",
     "zod": "^4.1.13"
   },
   "overrides": {
-    "onnxruntime-node": "1.20.1"
+    "onnxruntime-node": "1.21.0"
   },
   "devDependencies": {
     "@tsconfig/bun": "^1.0.10",
@@ -45,7 +45,7 @@
   },
   "allowScripts": {
     "msgpackr-extract@3.0.4": true,
-    "onnxruntime-node@1.20.1": true,
+    "onnxruntime-node@1.21.0": true,
     "protobufjs@7.6.1": true,
     "sharp@0.34.5": true
   }

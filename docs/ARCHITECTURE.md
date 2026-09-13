@@ -19,7 +19,7 @@
 1. **Plugin initialization** (`src/plugin.ts`)
    - Loads global permissions
    - Discovers all available skills
-   - Precomputes skill embeddings (async, non-blocking)
+   - Precomputes skill embeddings (async, non-blocking). The native `@huggingface/transformers` backend is imported lazily on first use; a load failure disables semantic matching without affecting tool registration (see `docs/features/SEMANTIC_MATCHING.md` INV-008)
    - Registers 4 tools with OpenCode
 
 2. **Session start** (`chat.message` event, first message)
@@ -65,7 +65,7 @@
 | System | Purpose | Integration Point |
 |--------|---------|-------------------|
 | OpenCode Plugin API | Plugin framework, session management, tool registration | `@opencode-ai/plugin` package |
-| Hugging Face Transformers | Text embedding generation for semantic matching | `@huggingface/transformers` package |
+| Hugging Face Transformers | Text embedding generation for semantic matching (lazy, optional — plugin works without it) | `@huggingface/transformers` package |
 | File System | Skill discovery, script execution, logging | `node:fs/promises`, `node:path` |
 | Claude Code Ecosystem | Skill and plugin compatibility | `~/.claude/plugins/`, `~/.claude/skills/` |
 
@@ -91,3 +91,4 @@ Plus two plugin-level caches:
 - [ADR-001: Anthropic Skills Spec](DECISIONS/001-why-anthropic-skills-spec.md) — Why we standardize on the Anthropic Agent Skills Spec
 - [ADR-002: Custom Permission Key](DECISIONS/002-why-custom-permission-key.md) — Why we avoid OpenCode's native `skill` permission key
 - [ADR-003: Synthetic Injection](DECISIONS/003-why-synthetic-injection.md) — Why we use synthetic messages instead of tool return values for skill content
+- [ADR-004: Lazy Native Import](DECISIONS/004-why-lazy-native-import.md) — Why the native embeddings backend is loaded lazily instead of at module scope

@@ -14,7 +14,7 @@ This plugin provides skill discovery, loading, and management capabilities for O
 | TypeScript | Primary language | 5.9.3 (strict mode) |
 | Zod | Runtime validation schemas | 4.1.13 |
 | @opencode-ai/plugin | Plugin framework | 1.0.115 |
-| @huggingface/transformers | Semantic skill matching (embeddings) | 3.8.1 |
+| @huggingface/transformers | Semantic skill matching (embeddings; optional, lazily loaded) | 3.8.1 |
 | YAML | Frontmatter parsing | 2.8.2 |
 
 ## Directory Structure
@@ -48,6 +48,7 @@ This plugin provides skill discovery, loading, and management capabilities for O
 - [ADR-001: Anthropic Skills Spec](DECISIONS/001-why-anthropic-skills-spec.md) — Why we adopt the Anthropic Agent Skills Spec
 - [ADR-002: Custom Permission Key](DECISIONS/002-why-custom-permission-key.md) — Why we use a custom permission key instead of OpenCode's native skill permission
 - [ADR-003: Synthetic Injection](DECISIONS/003-why-synthetic-injection.md) — Why we use synthetic message injection for skill persistence
+- [ADR-004: Lazy Native Import](DECISIONS/004-why-lazy-native-import.md) — Why the native embeddings backend is loaded lazily instead of at module scope
 
 ### Feature-Level Documents
 
@@ -65,8 +66,9 @@ This plugin provides skill discovery, loading, and management capabilities for O
 | **Skill** | A reusable unit of AI agent behavior, packaged as a directory containing `SKILL.md` with YAML frontmatter and optional supporting files/scripts |
 | **Synthetic injection** | Injecting content into the conversation context via `noReply` + `synthetic` messages, making it persistent but invisible to the user |
 | **Skill label** | Source identifier for a skill: `project`, `user`, `claude-project`, `claude-user`, or `claude-plugins` |
-| **Embedding** | A numerical vector representation of text, used to compute semantic similarity between user messages and skill descriptions |
+| **Embedding** | A numerical vector representation of text, used to compute semantic similarity between user messages and skill descriptions. Optional: the native backend is loaded lazily and matching degrades to a no-op when it is unavailable |
+| **JSONC** | JSON with comments. `opencode.json` is parsed this way via `parseJsonc` (`src/utils.ts`), which strips `//` line and `/* */` block comments but does not accept trailing commas. See PAT-009 |
 | **Permission rule** | A glob pattern paired with an action (`allow`, `deny`, `ask`) that controls whether an agent may use a skill |
 | **Superpowers mode** | Optional mode that auto-injects the `using-superpowers` skill content on session start |
 | **Compaction resilience** | The property of re-injecting skills after OpenCode's context compaction event to maintain availability across long sessions |
-| **`OPENCODE_AGENT_SKILLS_LOG_FILE`** | Optional environment variable that overrides the default debug log path (`~/.config/opencode/opencode-agent-skills/debug.log`). Set to an empty string to use the default. See PAT-008. |
+| **`OPENCODE_AGENT_SKILLS_LOG_FILE`** | Optional environment variable. When non-empty, it is used verbatim as the exact active debug log path (no timestamping, no automatic pruning). Empty string or unset = the default per-session timestamped file under `~/.config/opencode/opencode-agent-skills/` (10-day retention). See PAT-008. |

@@ -57,6 +57,83 @@ export function parseYamlFrontmatter(text: string): Record<string, unknown> {
 }
 
 /**
+ * Strip `//` line comments and slash-star block comments from JSONC text,
+ * leaving comment-like sequences inside string literals intact.
+ *
+ * ponytail: comments only — JSONC also allows trailing commas; add that here
+ * if an `opencode.json` with one ever shows up.
+ */
+function stripJsonComments(text: string): string {
+  let out = "";
+  let inString = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]!;
+    const next = text[i + 1];
+
+    if (inLineComment) {
+      if (char === "\n") {
+        inLineComment = false;
+        out += char;
+      }
+      continue;
+    }
+    if (inBlockComment) {
+      if (char === "*" && next === "/") {
+        inBlockComment = false;
+        i++;
+      } else if (char === "\n") {
+        out += char; // keep line count roughly aligned for error messages
+      }
+      continue;
+    }
+    if (inString) {
+      out += char;
+      if (char === "\\") {
+        out += next ?? "";
+        i++;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      out += char;
+      continue;
+    }
+    if (char === "/" && next === "/") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+    out += char;
+  }
+  // An unterminated block comment means the config is truncated/corrupt; fail
+  // loudly rather than silently parsing a mangled document.
+  if (inBlockComment) {
+    throw new SyntaxError("Unterminated block comment");
+  }
+  return out;
+}
+
+/**
+ * Parse JSONC (JSON with comments) into a value. OpenCode accepts its
+ * `opencode.json` as JSONC, so a strict `JSON.parse` would reject benign
+ * comments and silently discard the plugin's config and permissions.
+ */
+export function parseJsonc(text: string): unknown {
+  return JSON.parse(stripJsonComments(text));
+}
+
+/**
  * Calculate Levenshtein edit distance between two strings.
  * Used for fuzzy matching suggestions when skill/script names are not found.
  * @internal - exported for testing

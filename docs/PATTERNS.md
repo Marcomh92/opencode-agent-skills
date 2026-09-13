@@ -88,7 +88,7 @@ This document defines common code patterns, idioms, and conventions used consist
 
 ## PAT-008: Async Logging
 
-**Pattern:** All logging is async (`Promise<void>`) and writes to a single debug log file. The default path is `~/.config/opencode/opencode-agent-skills/debug.log` (resolved via `os.homedir()`, works on Linux and Windows). The path is overridable via the `OPENCODE_AGENT_SKILLS_LOG_FILE` environment variable; the parent directory is auto-created on first write.
+**Pattern:** All logging is async (`Promise<void>`). `initSessionLog()` runs once at plugin startup (`src/plugin.ts`) and sets the active log file: by default a fresh timestamped `debug-<ISO>-<rand>.log` under `~/.config/opencode/opencode-agent-skills/`; otherwise `OPENCODE_AGENT_SKILLS_LOG_FILE` (non-empty) is used verbatim. Empty string or unset env var = default. `log(message)` appends a `[ISO timestamp] message` line to the active file; parent directories are auto-created on first write. On the default path, `initSessionLog()` also prunes any `debug-*.log` or the legacy `debug.log` in that directory whose mtime is strictly older than 10 days. With an env override, no timestamping and no pruning occur.
 
 **When to use:** All diagnostic logging in the plugin.
 
@@ -96,4 +96,16 @@ This document defines common code patterns, idioms, and conventions used consist
 
 **Source:** `src/logger.ts`
 
-**Rationale:** Avoids blocking the event loop. Failures are silently ignored to prevent logging errors from breaking functionality. Portability via `os.homedir()` and the env-var override let the log work across operating systems without code changes.
+**Rationale:** Per-session files preserve history that was previously overwritten on every session start; 10-day retention bounds disk usage automatically. Async I/O avoids blocking the event loop. Failures are silently ignored so logging errors cannot break functionality. `os.homedir()` plus the env-var override let the log work across operating systems without code changes.
+
+## PAT-009: JSONC for `opencode.json`
+
+**Pattern:** Parse `opencode.json` with `parseJsonc` (`src/utils.ts`), never `JSON.parse`. `parseJsonc` strips `//` line and `/* */` block comments in a string-aware way (comment markers inside JSON string values are preserved), then delegates to `JSON.parse`. An unterminated block comment throws `SyntaxError("Unterminated block comment")`.
+
+**When to use:** Every read of `opencode.json` — global permissions in `src/permissions.ts`, and `stripPatterns` / `includeSkillDescriptions` in `src/strip-patterns.ts`.
+
+**When not to use:** Files the plugin does not own (for example, Claude plugin manifests), which are not treated as JSONC.
+
+**Source:** `src/utils.ts` (`parseJsonc`)
+
+**Rationale:** OpenCode treats `opencode.json` as JSONC. Strict `JSON.parse` throws on a comment, and the caller's catch silently discards the configured permissions and plugin config in favor of defaults — a harmless `//` in the user's file would silently disable their permission rules. Comments are the only newly tolerated construct; trailing commas are deliberately not supported. For a comment-free document `parseJsonc` is identical to `JSON.parse`.

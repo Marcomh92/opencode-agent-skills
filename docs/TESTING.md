@@ -22,16 +22,17 @@ Tests are colocated with source files:
 
 | Source | Test File | Coverage |
 |--------|-----------|----------|
-| `src/permissions.ts` | `src/permissions.test.ts` | Pattern matching, permission merging, evaluation |
-| `src/utils.ts` | `src/utils.test.ts` | Levenshtein distance, fuzzy matching |
-| `src/embeddings.ts` | `src/embeddings.test.ts` | Embedding generation, cosine similarity, skill matching |
-| `src/logger.ts` | `src/logger.test.ts` | Default path resolution, env var override, mkdir auto-create, silent error swallowing |
+| `src/permissions.ts` | `src/permissions.test.ts` | Pattern matching, permission merging, evaluation, JSONC global config loading |
+| `src/utils.ts` | `src/utils.test.ts` | Levenshtein distance, fuzzy matching, JSONC parsing (`parseJsonc`) |
+| `src/embeddings.ts` | `src/embeddings.test.ts` | Embedding generation, cosine similarity, skill matching, graceful disable on transformers load failure (isolated subprocess) |
+| `src/logger.ts` | `src/logger.test.ts` | Per-session file creation, 10-day retention pruning (with non-matching filenames untouched), env var override (verbatim + no pruning), mkdir auto-create, silent error swallowing |
+| `src/strip-patterns.ts` | `src/strip-patterns.test.ts` | Strip-pattern compilation, JSONC config loading (`stripPatterns`, `includeSkillDescriptions`)
 
 ## Mocking Rules
 
 - **Mock external systems:** File system, network (HF_ENDPOINT), environment variables
 - **Do not mock internal collaborators:** Test actual permission logic, actual fuzzy matching
-- **Use real implementations where feasible:** Embedding tests use the actual Transformers.js model
+- **Use real implementations where feasible:** Embedding tests use the actual Transformers.js model, except the import-failure test, which runs in a fresh subprocess with a throwing mock registered before the package loads (see `src/embeddings-import-failure.fixture.ts`) to reproduce a native-addon load failure
 
 ## Test Data Management
 

@@ -309,6 +309,46 @@ describe("loadStripPatterns", () => {
     expect(result).toEqual(["<x>", "<y>", "[TODO]"]);
   });
 
+  test("reads stripPatterns from a project-level opencode.json containing JSONC comments", async () => {
+    const projectConfig = path.join(projectDir, ".opencode", "opencode.json");
+    await fs.mkdir(path.dirname(projectConfig), { recursive: true });
+    const jsonc = `{
+      // Strip these from user text before matching
+      "opencode-agent-skills": {
+        "stripPatterns": [
+          "<x>",   // whole-block pattern
+          "[TODO]" /* literal pattern */
+        ]
+      }
+    }`;
+    await fs.writeFile(projectConfig, jsonc, "utf-8");
+
+    // Pre-fix, JSON.parse rejected JSONC and the loader silently returned the
+    // default patterns instead of the configured ones.
+    expect(() => JSON.parse(jsonc)).toThrow();
+
+    const result = await loadStripPatterns(projectDir);
+    expect(result).toEqual(["<x>", "[TODO]"]);
+  });
+
+  test("does not treat comment markers inside string values as comments", async () => {
+    const projectConfig = path.join(projectDir, ".opencode", "opencode.json");
+    await fs.mkdir(path.dirname(projectConfig), { recursive: true });
+    await fs.writeFile(
+      projectConfig,
+      `{
+        // "stripPatterns": ["<commented-out>"] — not active
+        "opencode-agent-skills": {
+          "stripPatterns": ["https://example.com//a/*b*/"]
+        }
+      }`,
+      "utf-8",
+    );
+
+    const result = await loadStripPatterns(projectDir);
+    expect(result).toEqual(["https://example.com//a/*b*/"]);
+  });
+
   test("reads from user-level opencode.json when the project has no config", async () => {
     const userConfig = path.join(userOpencodeDir, "opencode.json");
     await fs.writeFile(
@@ -527,6 +567,22 @@ describe("loadRelevantSkillConfig", () => {
       }),
       "utf-8",
     );
+
+    const result = await loadRelevantSkillConfig(projectDir);
+    expect(result).toEqual({ includeSkillDescriptions: false });
+  });
+
+  test("reads includeSkillDescriptions from a JSONC config with comments", async () => {
+    const projectConfig = path.join(projectDir, ".opencode", "opencode.json");
+    await fs.mkdir(path.dirname(projectConfig), { recursive: true });
+    const jsonc = `{
+      // Compact mode for this project
+      "opencode-agent-skills": { "includeSkillDescriptions": false /* titles only */ }
+    }`;
+    await fs.writeFile(projectConfig, jsonc, "utf-8");
+
+    // Pre-fix, JSON.parse rejected JSONC and the default (true) was returned.
+    expect(() => JSON.parse(jsonc)).toThrow();
 
     const result = await loadRelevantSkillConfig(projectDir);
     expect(result).toEqual({ includeSkillDescriptions: false });
