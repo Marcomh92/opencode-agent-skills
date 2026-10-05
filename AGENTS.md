@@ -171,62 +171,39 @@ Bug reports live in `known_issues/`.
 
 ## GitNexus — Code Intelligence
 
-Gitnexus can be used to get a deep architectural view of the codebase so you are less likely to miss dependencies, break call chains, and ship blind edits.
+GitNexus gives a structural view of the codebase: who calls what, what breaks on a change, and which files a rename must touch. It is a snapshot of the last `gitnexus analyze` — git remains ground truth for what changed on disk.
 
-This project is indexed by GitNexus as repo **opencode-agent-skills**. All gitnexus_* tools are MCP tool calls — invoke them directly, **never** via the bash tool. Always pass `repo: "opencode-agent-skills"` explicitly.
+**`REPO` is this project's GitNexus repo name. Every `opencode-agent-skills` below means the value of `REPO`.** This project is indexed as `opencode-agent-skills`. All gitnexus_* MCP tools are invoked directly, **never** via the bash tool.
 
-#### Index maintenance (escape hatch — only when needed)
+### Enabled Tools
 
-The only gitnexus action that uses the bash tool is rebuilding a stale index. Verify staleness first with `gitnexus_query({query: "project overview", repo: "opencode-agent-skills"})`. If it reports a stale or missing index, run from the project root:
+| Tool | Use for |
+| --- | --- |
+| `gitnexus_impact` | Depth-ordered blast radius + risk grade before editing a shared symbol |
+| `gitnexus_context` | Callers, callees, implements/extends for one symbol |
+| `gitnexus_rename` | Graph-aware multi-file rename — always `dry_run: true` first |
+| `gitnexus_detect_changes` | Changed symbols and impacted flows for a diff |
+| `gitnexus_list_repos` | Discovering the repo name |
 
-```
-gitnexus analyze
-```
-
-Skip this step if `project overview` returns current results.
+Not available: `gitnexus_query`, `gitnexus_cypher`, `gitnexus://` MCP resources.
 
 ### Always Do
 
-- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `gitnexus_impact({target: "symbolName", direction: "upstream", repo: "opencode-agent-skills"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
-- **MUST run `gitnexus_detect_changes({repo: "opencode-agent-skills"})` before committing** to verify your changes only affect expected symbols and execution flows.
-- **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- When exploring unfamiliar code, use `gitnexus_query({query: "concept", repo: "opencode-agent-skills"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName", repo: "opencode-agent-skills"})`.
-- **MUST pass `repo: "opencode-agent-skills"` in every gitnexus_* tool call** — the parameter is technically optional with one indexed repo, but omitting it produces errors in this environment.
+- Resolve the symbol before analyzing it — `grep` for the name to get its real `file_path`. Users name the wrong class often enough that a name-only call returns a confident answer about the wrong symbol.
+- Run `gitnexus_impact({target, file_path, direction: "upstream", summaryOnly: true, repo: "opencode-agent-skills"})` before editing any existing symbol — function, class, method, property, or constant — and report the risk grade to the user.
+- Warn the user before editing when impact returns HIGH or CRITICAL.
+- Run `gitnexus_detect_changes({scope: "all", repo: "opencode-agent-skills"})` before committing.
+- Use `summaryOnly: true` on the first `impact` call for any symbol — a full dump on a hub symbol floods context.
+- Treat an empty impact result as unproven, not safe. Zero d=1 records also means "not in the index" — cross-check with `grep`.
+- `grep` for the old name after every rename — the graph cannot see string literals, comments, annotation values, or resource IDs.
 
 ### Never Do
 
-- NEVER edit a function, class, or method without first running `gitnexus_impact` on it.
-- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
-- NEVER rename symbols with find-and-replace — use `gitnexus_rename` which understands the call graph.
-- NEVER commit changes without running `gitnexus_detect_changes()` to check affected scope.
-- NEVER invoke gitnexus_* tools via the bash tool — they are MCP tools. The single bash exception is `gitnexus analyze` for rebuilding a stale index.
+- NEVER edit a symbol without first running `gitnexus_impact` on it.
+- NEVER rename with find-and-replace — use `gitnexus_rename`.
+- NEVER trust the graph for which files changed — `gitnexus_detect_changes` misses untracked files.
+- NEVER invoke gitnexus_* MCP tools via the bash tool.
 
-### Quick Reference
+### Index Maintenance
 
-> Every example below includes `repo: "opencode-agent-skills"`. Do not omit it.
-
-#### Discover Repositories
-```
-gitnexus_list_repos()
-```
-
-#### Codebase Overview & Staleness Check
-```
-gitnexus_query({query: "project overview", repo: "opencode-agent-skills"})
-```
-
-#### Functional Areas (Clusters)
-```
-gitnexus_cypher({query: "MATCH (c:Community) RETURN c.heuristicLabel, c.symbolCount, c.cohesion ORDER BY c.symbolCount DESC", repo: "opencode-agent-skills"})
-```
-
-#### Execution Flows (Processes)
-```
-gitnexus_cypher({query: "MATCH (p:Process) RETURN p.heuristicLabel, p.stepCount, p.processType ORDER BY p.stepCount DESC", repo: "opencode-agent-skills"})
-```
-
-#### Step-by-Step Execution Trace
-```
-gitnexus_cypher({query: "MATCH (s)-[r:CodeRelation {type: 'STEP_IN_PROCESS'}]->(p:Process) WHERE p.heuristicLabel = 'ProcessName' RETURN s.name, r.step ORDER BY r.step", repo: "opencode-agent-skills"})
-```
+Check freshness from the project root with `gitnexus status`. It compares the indexed commit against the current one and prints `Status: up-to-date` or marks it stale. If stale, rebuild with `gitnexus analyze`. These two commands are the only shell exceptions to the no-bash rule for gitnexus MCP tools.
